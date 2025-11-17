@@ -24,12 +24,16 @@ else ifeq ($(ARCH),s390)
 	override LDSONAME=ld64.so.1
 endif
 
+UBI_VERSIONS ?= ubi8 ubi9 ubi10
+
 .PHONY: calico-base-image
-calico-base-image: register
-	$(DOCKER_BUILD) --build-arg LDSONAME=$(LDSONAME) -t $(CALICO_BASE):ubi8-latest-$(ARCH) -f calico-base/Dockerfile.ubi8 calico-base/
-	$(MAKE) BUILD_IMAGES=$(CALICO_BASE) retag-build-images-with-registries VALIDARCHES=$(ARCH) LATEST_IMAGE_TAG=ubi8-latest IMAGETAG=ubi8-latest
-	$(DOCKER_BUILD) --build-arg LDSONAME=$(LDSONAME) -t $(CALICO_BASE):ubi9-latest-$(ARCH) -f calico-base/Dockerfile.ubi9 calico-base/
-	$(MAKE) BUILD_IMAGES=$(CALICO_BASE) retag-build-images-with-registries VALIDARCHES=$(ARCH) LATEST_IMAGE_TAG=ubi9-latest IMAGETAG=ubi9-latest
+calico-base-image: $(addprefix calico-base-image-,$(UBI_VERSIONS))
+
+.PHONY: calico-base-image-%
+calico-base-image-%: register
+	$(eval DOCKERFILE := $(if $(filter ubi8,$*),Dockerfile.ubi8,Dockerfile))
+	$(DOCKER_BUILD) --build-arg LDSONAME=$(LDSONAME) --build-arg=UBI_VERSION=$* -t $(CALICO_BASE):$*-latest-$(ARCH) -f calico-base/$(DOCKERFILE) calico-base/
+	$(MAKE) BUILD_IMAGES=$(CALICO_BASE) retag-build-images-with-registries VALIDARCHES=$(ARCH) LATEST_IMAGE_TAG=$*-latest IMAGETAG=$*-latest
 
 .PHONY: calico-base-image-all
 calico-base-image-all: $(addprefix sub-calico-base-image-,$(VALIDARCHES))
@@ -38,8 +42,7 @@ sub-calico-base-image-%:
 
 .PHONY: calico-base-cd
 calico-base-cd: calico-base-image-all var-require-one-of-CONFIRM-DRYRUN var-require-all-BRANCH_NAME
-	$(MAKE) BUILD_IMAGES=$(CALICO_BASE) retag-build-images-with-registries push-images-to-registries push-manifests LATEST_IMAGE_TAG=ubi8-latest IMAGETAG=ubi8-$(BRANCH_NAME) EXCLUDEARCH="$(EXCLUDEARCH)"
-	$(MAKE) BUILD_IMAGES=$(CALICO_BASE) retag-build-images-with-registries push-images-to-registries push-manifests LATEST_IMAGE_TAG=ubi9-latest IMAGETAG=ubi9-$(BRANCH_NAME) EXCLUDEARCH="$(EXCLUDEARCH)"
+	$(foreach version,$(UBI_VERSIONS),$(MAKE) BUILD_IMAGES=$(CALICO_BASE) retag-build-images-with-registries push-images-to-registries push-manifests LATEST_IMAGE_TAG=$(version)-latest IMAGETAG=$(version)-$(BRANCH_NAME) EXCLUDEARCH="$(EXCLUDEARCH)";)
 
 # Calico builder which contains Go/Clang compilers and necessary utilities for UT/FVs.
 .PHONY: build
