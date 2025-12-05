@@ -1,4 +1,6 @@
-FROM registry.access.redhat.com/ubi9/ubi-minimal:latest AS ubi
+ARG UBI_VERSION
+
+FROM registry.access.redhat.com/${UBI_VERSION}/ubi-minimal:latest AS ubi
 
 ARG LDSONAME
 
