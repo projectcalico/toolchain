@@ -2,7 +2,7 @@ ARG TARGETARCH=${TARGETARCH}
 
 FROM calico/bpftool:v7.4.0 AS bpftool
 
-FROM registry.access.redhat.com/ubi8/ubi:latest AS ubi
+FROM registry.access.redhat.com/ubi9/ubi:latest AS ubi
 
 ARG TARGETARCH
 
@@ -11,7 +11,6 @@ ARG CONTROLLER_TOOLS_VERSION=v0.18.0
 ARG GO_LINT_VERSION=v2.6.2
 ARG MOCKERY_VERSION=3.5.5
 ARG PROTOC_VERSION=33.1
-ARG YQ_VERSION=v4.49.2
 
 ENV PATH=/usr/local/go/bin:$PATH
 
@@ -37,18 +36,20 @@ RUN dnf upgrade -y && dnf install -y \
     xz \
     zip
 
-# Install yq and copy versions.yaml
-RUN curl -sfL https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${TARGETARCH} -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq
+# Install system dependencies that are not in UBI repos
+COPY almalinux/RPM-GPG-KEY-AlmaLinux-9 /etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-9
+COPY almalinux/almalinux*.repo /etc/yum.repos.d/
 
+# Install yq and copy versions.yaml
 COPY versions.yaml /etc/versions.yaml
 
-# Install system dependencies that are not in UBI repos
-COPY almalinux/RPM-GPG-KEY-AlmaLinux /etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux
-COPY almalinux/almalinux*.repo /etc/yum.repos.d/
+RUN set -eux; \
+    dnf --enablerepo=extras install -y epel-release && \
+    dnf install -y yq
 
 RUN set -eux; \
     llvm_version=$(yq -r .llvm.version /etc/versions.yaml); \
-    dnf --enablerepo=baseos,powertools,appstream install -y \
+    dnf --enablerepo=appstream,baseos,crb install -y \
     clang-${llvm_version} \
     elfutils-libelf-devel \
     iproute-devel \
@@ -58,7 +59,7 @@ RUN set -eux; \
 
 RUN set -eux; \
     if [ "${TARGETARCH}" = "amd64" ]; then \
-        dnf --enablerepo=powertools install -y \
+        dnf --enablerepo=appstream,baseos,crb install -y \
             mingw64-gcc; \
     fi
 

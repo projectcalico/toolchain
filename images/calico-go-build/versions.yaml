@@ -9,4 +9,4 @@ golang:
 kubernetes:
   version: 1.34.2
 llvm:
-  version: 18.1.8
+  version: 20.1.8
