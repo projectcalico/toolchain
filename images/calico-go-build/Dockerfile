@@ -7,7 +7,7 @@ FROM registry.access.redhat.com/ubi8/ubi:latest AS ubi
 ARG TARGETARCH
 
 ARG CONTAINERREGISTRY_VERSION=v0.20.7
-ARG CONTROLLER_TOOLS_VERSION=v0.18.0
+ARG CONTROLLER_TOOLS_VERSION=v0.20.0
 ARG GO_LINT_VERSION=v2.6.2
 ARG MOCKERY_VERSION=3.5.5
 ARG PROTOC_VERSION=33.1
@@ -158,13 +158,8 @@ RUN set -eux; \
 # Install Go utilities
 
 # controller-gen is used for generating CRD files.
-COPY patches/controller-gen-Support-Calico-NumOrString-types.patch /tmp/controller-tools/calico.patch
-
 RUN set -eux; \
-    curl -sfL https://github.com/kubernetes-sigs/controller-tools/archive/refs/tags/${CONTROLLER_TOOLS_VERSION}.tar.gz | tar xz --strip-components 1 -C /tmp/controller-tools; \
-    cd /tmp/controller-tools && patch -p1 < calico.patch && CGO_ENABLED=0 go build -o /usr/local/bin/controller-gen -v -buildvcs=false \
-        -ldflags "-X sigs.k8s.io/controller-tools/pkg/version.version=${CONTROLLER_TOOLS_VERSION} -s -w" ./cmd/controller-gen; \
-    rm -fr /tmp/controller-tools
+    curl -sfL https://github.com/kubernetes-sigs/controller-tools/releases/download/${CONTROLLER_TOOLS_VERSION}/controller-gen-linux-${TARGETARCH} -o /usr/local/bin/controller-gen && chmod +x /usr/local/bin/controller-gen
 
 # crane is needed for our release targets to copy images from the dev registries to the release registries.
 RUN set -eux; \
