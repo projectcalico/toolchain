@@ -159,11 +159,7 @@ RUN set -eux; \
 
 # controller-gen is used for generating CRD files.
 RUN set -eux; \
-    mkdir -p /tmp/controller-tools; \
-    curl -sfL https://github.com/kubernetes-sigs/controller-tools/archive/refs/tags/${CONTROLLER_TOOLS_VERSION}.tar.gz | tar xz --strip-components 1 -C /tmp/controller-tools; \
-    cd /tmp/controller-tools && CGO_ENABLED=0 go build -o /usr/local/bin/controller-gen -v -buildvcs=false \
-        -ldflags "-X sigs.k8s.io/controller-tools/pkg/version.version=${CONTROLLER_TOOLS_VERSION} -s -w" ./cmd/controller-gen; \
-    rm -fr /tmp/controller-tools
+    curl -sfL https://github.com/kubernetes-sigs/controller-tools/releases/download/${CONTROLLER_TOOLS_VERSION}/controller-gen-linux-${TARGETARCH} -o /usr/local/bin/controller-gen && chmod +x /usr/local/bin/controller-gen
 
 # crane is needed for our release targets to copy images from the dev registries to the release registries.
 RUN set -eux; \
