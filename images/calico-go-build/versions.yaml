@@ -1,5 +1,5 @@
 golang:
-  version: 1.24.11
+  version: 1.24.12
   checksum:
     sha256:
       amd64: bceca00afaac856bc48b4cc33db7cd9eb383c81811379faed3bdbc80edb0af65
