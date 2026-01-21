@@ -8,10 +8,10 @@ ARG TARGETARCH
 
 ARG CONTAINERREGISTRY_VERSION=v0.20.7
 ARG CONTROLLER_TOOLS_VERSION=v0.18.0
-ARG GO_LINT_VERSION=v2.6.2
-ARG MOCKERY_VERSION=3.5.5
-ARG PROTOC_VERSION=33.1
-ARG YQ_VERSION=v4.49.2
+ARG GO_LINT_VERSION=v2.8.0
+ARG MOCKERY_VERSION=3.6.3
+ARG PROTOC_VERSION=33.4
+ARG YQ_VERSION=v4.50.1
 
 ENV PATH=/usr/local/go/bin:$PATH
 
@@ -196,14 +196,14 @@ RUN set -eux; \
 # Install ginkgo v2 as ginkgo2 and keep ginkgo v1 as ginkgo
 RUN set -eux; \
     k8s_libs_version=$(yq -r .kubernetes.version /etc/versions.yaml | sed 's/^1/0/'); \
-    go install github.com/onsi/ginkgo/v2/ginkgo@v2.27.2 && mv /go/bin/ginkgo /go/bin/ginkgo2 && \
+    go install github.com/onsi/ginkgo/v2/ginkgo@v2.27.5 && mv /go/bin/ginkgo /go/bin/ginkgo2 && \
     go install github.com/onsi/ginkgo/ginkgo@v1.16.5 && \
     go install github.com/jstemmer/go-junit-report@v1.0.0 && \
     go install github.com/wadey/gocovmerge@v0.0.0-20160331181800-b5bfa59ec0ad && \
-    go install golang.org/x/tools/cmd/goimports@v0.39.0 && \
-    go install golang.org/x/tools/cmd/stringer@v0.39.0 && \
+    go install golang.org/x/tools/cmd/goimports@v0.41.0 && \
+    go install golang.org/x/tools/cmd/stringer@v0.41.0 && \
     go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.0 && \
-    go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.10 && \
+    go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11 && \
     go install gotest.tools/gotestsum@v1.13.0 && \
     go install k8s.io/code-generator/cmd/client-gen@v${k8s_libs_version} && \
     go install k8s.io/code-generator/cmd/conversion-gen@v${k8s_libs_version} && \
