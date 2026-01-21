@@ -1,6 +1,6 @@
-From d3db9cd382359bdb1afa94f40e29ad9bebdeaf61 Mon Sep 17 00:00:00 2001
+From 6bb6d143bc40bc41da1ec987f12ee5cf5d3ea233 Mon Sep 17 00:00:00 2001
 From: Jiawei Huang <jiawei@tigera.io>
-Date: Fri, 6 Dec 2024 15:35:46 -0800
+Date: Tue, 20 Jan 2026 16:20:32 -0800
 Subject: [PATCH] Support Calico NumOrString types
 
 ---
@@ -8,34 +8,34 @@ Subject: [PATCH] Support Calico NumOrString types
  1 file changed, 35 insertions(+)
 
 diff --git a/pkg/crd/known_types.go b/pkg/crd/known_types.go
-index ab939328..8f9fa67d 100644
+index 6f8abb66..8a3cd429 100644
 --- a/pkg/crd/known_types.go
 +++ b/pkg/crd/known_types.go
-@@ -22,6 +22,35 @@ import (
+@@ -24,6 +24,35 @@ import (
  	"sigs.k8s.io/controller-tools/pkg/loader"
  )
  
 +// Custom logic for numOrString types.
 +var numOrString = func(p *Parser, pkg *loader.Package) {
-+	p.Schemata[TypeIdent{Name: "NumOrString", Package: pkg}] = apiext.JSONSchemaProps{
++	p.Schemata[TypeIdent{Name: "NumOrString", Package: pkg}] = apiextensionsv1.JSONSchemaProps{
 +		XIntOrString: true,
-+		AnyOf: []apiext.JSONSchemaProps{
++		AnyOf: []apiextensionsv1.JSONSchemaProps{
 +			{Type: "integer"},
 +			{Type: "string"},
 +		},
 +		Pattern: "^.*",
 +	}
-+	p.Schemata[TypeIdent{Name: "Protocol", Package: pkg}] = apiext.JSONSchemaProps{
++	p.Schemata[TypeIdent{Name: "Protocol", Package: pkg}] = apiextensionsv1.JSONSchemaProps{
 +		XIntOrString: true,
-+		AnyOf: []apiext.JSONSchemaProps{
++		AnyOf: []apiextensionsv1.JSONSchemaProps{
 +			{Type: "integer"},
 +			{Type: "string"},
 +		},
 +		Pattern: "^.*",
 +	}
-+	p.Schemata[TypeIdent{Name: "Port", Package: pkg}] = apiext.JSONSchemaProps{
++	p.Schemata[TypeIdent{Name: "Port", Package: pkg}] = apiextensionsv1.JSONSchemaProps{
 +		XIntOrString: true,
-+		AnyOf: []apiext.JSONSchemaProps{
++		AnyOf: []apiextensionsv1.JSONSchemaProps{
 +			{Type: "integer"},
 +			{Type: "string"},
 +		},
@@ -47,7 +47,7 @@ index ab939328..8f9fa67d 100644
  // KnownPackages overrides types in some comment packages that have custom validation
  // but don't have validation markers on them (since they're from core Kubernetes).
  var KnownPackages = map[string]PackageOverride{
-@@ -50,6 +79,12 @@ var KnownPackages = map[string]PackageOverride{
+@@ -52,6 +81,12 @@ var KnownPackages = map[string]PackageOverride{
  		p.AddPackage(pkg) // get the rest of the types
  	},
  
@@ -58,8 +58,8 @@ index ab939328..8f9fa67d 100644
 +	"github.com/tigera/api/pkg/lib/numorstring":             numOrString,
 +
  	"k8s.io/apimachinery/pkg/api/resource": func(p *Parser, pkg *loader.Package) {
- 		p.Schemata[TypeIdent{Name: "Quantity", Package: pkg}] = apiext.JSONSchemaProps{
+ 		p.Schemata[TypeIdent{Name: "Quantity", Package: pkg}] = apiextensionsv1.JSONSchemaProps{
  			// TODO(directxman12): regexp validation for this (or get kube to support it as a format value)
 -- 
-2.47.1
+2.52.0
 
