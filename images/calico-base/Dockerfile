@@ -24,6 +24,13 @@ RUN cp /lib64/libc.so.6 /rootfs/lib64/libc.so.6
 RUN cp /lib64/libpthread.so.0 /rootfs/lib64/libpthread.so.0
 RUN cp /lib64/libresolv.so.2 /rootfs/lib64/libresolv.so.2
 
+# Standard C library dependencies required for C/C++ applications.
+RUN cp /lib64/libdl.so.2 /rootfs/lib64/libdl.so.2
+RUN cp /lib64/libgcc_s.so.1 /rootfs/lib64/libgcc_s.so.1
+RUN cp /lib64/libm.so.6 /rootfs/lib64/libm.so.6
+RUN cp /lib64/librt.so.1 /rootfs/lib64/librt.so.1
+RUN cp /lib64/libstdc++.so.6 /rootfs/lib64/libstdc++.so.6
+
 # Glibc NSS plugins and config files.
 # Use our customized configuration, since the base image only includes the dns and files plugins.
 COPY nsswitch.conf /rootfs/etc/nsswitch.conf
