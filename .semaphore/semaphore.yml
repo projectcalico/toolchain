@@ -25,9 +25,13 @@ global_job_config:
       - git fetch --unshallow
 
 promotions:
-  # Publish base and go-build images for master or release tags (example: 1.23.3-llvm18.1.8-k8s1.30.5).
+  # Publish base, binfmt, and go-build images for master or release tags (example: 1.23.3-llvm18.1.8-k8s1.30.5).
   - name: Publish calico/base images
     pipeline_file: promotions/calico-base.yml
+    auto_promote:
+      when: "branch = 'master' OR tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+\\.\\d\\.\\d-k8s1\\.\\d+\\.\\d+'"
+  - name: Publish calico/binfmt images
+    pipeline_file: promotions/calico-binfmt.yml
     auto_promote:
       when: "branch = 'master' OR tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+\\.\\d\\.\\d-k8s1\\.\\d+\\.\\d+'"
   - name: Publish calico/go-build images
@@ -97,3 +101,11 @@ blocks:
           matrix:
             - env_var: ARCH
               values: ["amd64", "arm64", "ppc64le", "s390x"]
+
+  - name: calico/binfmt image
+    dependencies: []
+    task:
+      jobs:
+        - name: Build calico/binfmt amd64 image
+          commands:
+            - make -C images calico-binfmt-image ARCH=amd64
