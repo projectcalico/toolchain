@@ -97,3 +97,11 @@ blocks:
           matrix:
             - env_var: ARCH
               values: ["amd64", "arm64", "ppc64le", "s390x"]
+
+  - name: calico/binfmt image
+    dependencies: []
+    task:
+      jobs:
+        - name: Build calico/binfmt amd64 image
+          commands:
+            - make -C images calico-binfmt-image ARCH=amd64
