@@ -1,0 +1,31 @@
+version: v1.0
+name: Publish calico/binfmt images
+agent:
+  machine:
+    type: f1-standard-2
+    os_image: ubuntu2204
+
+execution_time_limit:
+  minutes: 30
+
+global_job_config:
+  env_vars:
+    - name: DEV_REGISTRIES
+      value: calico
+  secrets:
+    - name: docker
+  prologue:
+    commands:
+      - echo $DOCKER_TOKEN | docker login --username "$DOCKER_USER" --password-stdin
+      - checkout
+
+blocks:
+  - name: Publish calico/binfmt amd64 images
+    dependencies: []
+    run:
+      when: "branch = 'master' OR tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+\\.\\d\\.\\d-k8s1\\.\\d+\\.\\d+'"
+    task:
+      jobs:
+        - name: Linux amd64
+          commands:
+            - if [ -z "${SEMAPHORE_GIT_PR_NUMBER}" ]; then make -C images calico-binfmt-cd CONFIRM=true; fi
