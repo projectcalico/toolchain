@@ -2,16 +2,26 @@ include ../lib.Makefile
 include ../Makefile.common
 
 CALICO_BASE ?= base
+CALICO_BINFMT ?= binfmt
 CALICO_GO_BUILD ?= go-build
 CALICO_RUST_BUILD ?= rust-build
 
+.PHONY: build
+build:
+	$(MAKE) -C ../cmd build
+	mkdir -p calico-binfmt/bin calico-go-build/bin/
+	cp ../cmd/bin/binfmt-$(ARCH) calico-binfmt/bin/binfmt-$(ARCH)
+	cp ../cmd/bin/semvalidator-$(ARCH) calico-go-build/bin/semvalidator-$(ARCH)
+
 .PHONY: image
-image: calico-base-image calico-go-build-image calico-rust-build-image
+image: calico-base-image calico-binfmt-image calico-go-build-image calico-rust-build-image
 
 .PHONY: image-all
-image-all: calico-base-image-all calico-go-build-image-all calico-rust-build-image-all
+image-all: calico-base-image-all calico-binfmt-image calico-go-build-image-all calico-rust-build-image-all
 
-# Base image for all calico components.
+################################################################################
+# Base image for all Calico components.
+################################################################################
 
 # ELF interpreter (dynamic loader) soname
 LDSONAME=ld64.so.1
@@ -45,12 +55,9 @@ sub-calico-base-image-%:
 calico-base-cd: calico-base-image-all var-require-one-of-CONFIRM-DRYRUN var-require-all-BRANCH_NAME
 	$(foreach version,$(UBI_VERSIONS),$(MAKE) BUILD_IMAGES=$(CALICO_BASE) retag-build-images-with-registries push-images-to-registries push-manifests LATEST_IMAGE_TAG=$(version)-latest IMAGETAG=$(version)-$(BRANCH_NAME) EXCLUDEARCH="$(EXCLUDEARCH)";)
 
-# Calico builder which contains Go/Clang compilers and necessary utilities for UT/FVs.
-.PHONY: build
-build:
-	$(MAKE) -C ../cmd build
-	mkdir -p calico-go-build/bin/
-	cp ../cmd/bin/semvalidator-$(ARCH) calico-go-build/bin/semvalidator-$(ARCH)
+################################################################################
+# Calico builder contains Go/Clang compilers and necessary utilities for UT/FVs.
+################################################################################
 
 CALICO_GO_BUILD_IMAGETAG ?= latest
 
@@ -78,7 +85,28 @@ ifeq ($(BRANCH_NAME),master)
 	$(MAKE) BUILD_IMAGES=$(CALICO_GO_BUILD) push-manifests IMAGETAG=latest EXCLUDEARCH="$(EXCLUDEARCH)"
 endif
 
+################################################################################
+# Calico binfmt image provides prebuilt qemu binaries for multi-arch builds.
+################################################################################
+
+# qemu-user-static package version from Fedora
+QEMU_VERSION ?= $(shell yq -r '.qemu.version' calico-binfmt/versions.yaml)
+CALICO_BINFMT_IMAGETAG ?= qemu-v$(QEMU_VERSION)
+
+# We only build for amd64 architecture because our CI/CD runners are x86_64.
+.PHONY: calico-binfmt-image
+calico-binfmt-image: build
+	$(DOCKER_BUILD) --build-arg QEMU_VERSION=$(QEMU_VERSION) -t $(CALICO_BINFMT):$(CALICO_BINFMT_IMAGETAG)-amd64 -f calico-binfmt/Dockerfile calico-binfmt/
+	$(MAKE) BUILD_IMAGES=$(CALICO_BINFMT) retag-build-images-with-registries VALIDARCHES=amd64 LATEST_IMAGE_TAG=$(CALICO_BINFMT_IMAGETAG) IMAGETAG=$(CALICO_BINFMT_IMAGETAG)
+
+.PHONY: calico-binfmt-cd
+calico-binfmt-cd: calico-binfmt-image var-require-one-of-CONFIRM-DRYRUN
+	$(MAKE) BUILD_IMAGES=$(CALICO_BINFMT) retag-build-images-with-registries push-images-to-registries IMAGETAG=$(CALICO_BINFMT_IMAGETAG) LATEST_IMAGE_TAG=$(CALICO_BINFMT_IMAGETAG) VALIDARCHES=amd64 EXCLUDEARCH="$(EXCLUDEARCH)"
+
+################################################################################
 # Calico rust-build image with Rust toolchain.
+################################################################################
+
 CALICO_RUST_BUILD_IMAGETAG ?= latest
 
 .PHONY: calico-rust-build-image
@@ -99,9 +127,14 @@ calico-rust-build-cd: calico-rust-build-image var-require-one-of-CONFIRM-DRYRUN 
 push-calico-rust-build-manifests: var-require-one-of-CONFIRM-DRYRUN var-require-all-BRANCH_NAME
 	$(MAKE) BUILD_IMAGES=$(CALICO_RUST_BUILD) push-manifests IMAGETAG=$(BRANCH_NAME) EXCLUDEARCH="$(EXCLUDEARCH)"
 
+################################################################################
+# Clean up
+################################################################################
+
 .PHONY: clean
 clean:
-	rm -fr calico-go-build/bin
+	rm -fr calico-binfmt/bin calico-go-build/bin
 	-docker image rm -f $$(docker images $(CALICO_BASE) -a -q)
+	-docker image rm -f $$(docker images $(CALICO_BINFMT) -a -q)
 	-docker image rm -f $$(docker images $(CALICO_GO_BUILD) -a -q)
 	-docker image rm -f $$(docker images $(CALICO_RUST_BUILD) -a -q)
