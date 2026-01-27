@@ -1,4 +1,4 @@
-FROM fedora:43 AS qemu
+FROM fedora AS qemu
 
 ARG QEMU_VERSION
 
