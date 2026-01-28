@@ -1,8 +1,8 @@
-[![Build Status](https://tigera.semaphoreci.com/badges/go-build/branches/master.svg?style=shields)](https://tigera.semaphoreci.com/projects/go-build)
+[![Build Status](https://tigera.semaphoreci.com/badges/go-build/branches/master.svg?style=shields)](https://tigera.semaphoreci.com/projects/toolchain)
 
-# Calico go-build
+# Calico toolchain repository
 
-Calico go-build image holds Go and Clang toolchains and necessary utilities for building various [Calico](https://projectcalico.org) projects.
+Calico toolchain repository holds Go, LLVM, and Rust toolchains and necessary utilities for building various [Calico](https://projectcalico.org) components.
 
 ## Building the image
 
