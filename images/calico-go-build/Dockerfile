@@ -56,6 +56,11 @@ RUN set -eux; \
     libbpf-devel \
     llvm-${llvm_version}
 
+RUN dnf config-manager --set-enabled powertools -y
+RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm
+RUN dnf --enablerepo=epel,baseos,powertools,appstream install -y \
+      ccache
+
 RUN set -eux; \
     if [ "${TARGETARCH}" = "amd64" ]; then \
         dnf --enablerepo=powertools install -y \
