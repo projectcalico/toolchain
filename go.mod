@@ -1,6 +1,6 @@
 module github.com/projectcalico/go-build
 
-go 1.25.6
+go 1.25.7
 
 require (
 	github.com/containerd/platforms v1.0.0-rc.2
