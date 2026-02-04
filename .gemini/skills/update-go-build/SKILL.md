@@ -11,7 +11,7 @@ This skill automates the process of updating the Go and Kubernetes versions for 
 
 First, read the `versions.yaml` file to get the current versions of Go and Kubernetes. This is crucial for determining what to search for.
 
-```
+```python
 print(default_api.read_file(file_path="images/calico-go-build/versions.yaml"))
 ```
 
@@ -19,7 +19,7 @@ print(default_api.read_file(file_path="images/calico-go-build/versions.yaml"))
 
 Execute a web fetch to get the official Go downloads page. From the HTML, identify the latest stable version and the SHA256 checksums for the `amd64`, `arm64`, `ppc64le`, and `s390x` Linux tarballs.
 
-```
+```python
 print(default_api.web_fetch(prompt="Fetch the content of https://go.dev/dl/ and find the latest stable Go version number and the SHA256 checksums for the Linux tarballs for amd64, arm64, ppc64le, and s390x architectures."))
 ```
 
@@ -27,7 +27,7 @@ print(default_api.web_fetch(prompt="Fetch the content of https://go.dev/dl/ and 
 
 Based on the current Kubernetes version read in Step 1, execute a web fetch to find the latest patch release for that *specific minor version*. **You must replace `<major.minor>` with the version from the file (e.g., '1.34').**
 
-```
+```python
 print(default_api.web_fetch(prompt="Fetch the content of https://kubernetes.io/releases/ and find the latest patch release for the Kubernetes <major.minor> series."))
 ```
 
@@ -41,9 +41,9 @@ print(default_api.web_fetch(prompt="Fetch the content of https://kubernetes.io/r
 
 If any updates are needed, perform a single `replace` operation to update the entire `versions.yaml` file. This is more efficient than running multiple separate replacements.
 
-**You must construct the `<new_versions_yaml_content>` block with all the updated Go and Kubernetes information, while preserving the LLVM version.**
+**Critical**: You must construct the `<new_versions_yaml_content>` block with all the updated Go and Kubernetes information, while preserving the LLVM version exactly as it was.
 
-```
+```python
 print(default_api.replace(
   file_path="images/calico-go-build/versions.yaml",
   instruction="Update Go and Kubernetes versions in a single operation.",
@@ -56,8 +56,19 @@ print(default_api.replace(
 
 After updating the file, show the changes and propose a commit message.
 
-```
+```python
 print(default_api.run_shell_command(command="git status && git diff HEAD"))
 ```
 
 Propose a commit message, such as: `feat(go-build): Update Go to <new_version> and Kubernetes to <new_version>`.
+
+**Step 7: Check for Release Branch**
+
+Check if a release branch for this Go version already exists (e.g., `go1.26`).
+
+```python
+print(default_api.run_shell_command(command="git ls-remote --heads origin go1.XX")) # Replace 1.XX with the new Go minor version
+```
+
+- If it exists and you are on `master`, remind the user that this change might need to be cherry-picked.
+- If it does not exist, remind the user that merging this to `master` will trigger the creation of the new branch.
