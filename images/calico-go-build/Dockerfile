@@ -1,8 +1,6 @@
 ARG TARGETARCH=${TARGETARCH}
 
-FROM calico/bpftool:v7.4.0 AS bpftool
-
-FROM registry.access.redhat.com/ubi8/ubi:latest AS ubi
+FROM almalinux:9 AS builder
 
 ARG TARGETARCH
 
@@ -10,55 +8,50 @@ ARG CONTAINERREGISTRY_VERSION=v0.20.7
 ARG CONTROLLER_TOOLS_VERSION=v0.18.0
 ARG GO_LINT_VERSION=v2.8.0
 ARG MOCKERY_VERSION=3.5.5
-ARG PROTOC_VERSION=33.4
-ARG YQ_VERSION=v4.50.1
+ARG PROTOC_VERSION=33.5
 
 ENV PATH=/usr/local/go/bin:$PATH
 
 # Install system dependencies
-RUN dnf upgrade -y && dnf install -y \
-    autoconf \
-    automake \
-    bsdtar \
-    gcc \
-    gcc-c++ \
-    git \
-    iputils \
-    jq \
-    libcurl-devel \
-    libpcap-devel \
-    libtool \
-    make \
-    openssh-clients \
-    patch \
-    pcre-devel \
-    pkg-config \
-    wget \
-    xz \
-    zip
-
-# Install yq and copy versions.yaml
-RUN curl -sfL https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${TARGETARCH} -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq
-
 COPY versions.yaml /etc/versions.yaml
 
-# Install system dependencies that are not in UBI repos
-COPY almalinux/RPM-GPG-KEY-AlmaLinux /etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux
-COPY almalinux/almalinux*.repo /etc/yum.repos.d/
+RUN dnf upgrade -y && dnf install -y epel-release && \
+    dnf install -y yq
 
 RUN set -eux; \
     llvm_version=$(yq -r .llvm.version /etc/versions.yaml); \
-    dnf --enablerepo=baseos,powertools,appstream install -y \
-    clang-${llvm_version} \
-    elfutils-libelf-devel \
-    iproute-devel \
-    iproute-tc \
-    libbpf-devel \
-    llvm-${llvm_version}
+    dnf --enablerepo=crb install -y \
+        autoconf \
+        automake \
+        bpftool \
+        bsdtar \
+        ccache \
+        clang-${llvm_version} \
+        elfutils-libelf-devel \
+        gcc \
+        gcc-c++ \
+        git \
+        iproute-devel \
+        iproute-tc \
+        iputils \
+        jq \
+        libbpf-devel \
+        libcurl-devel \
+        libpcap-devel \
+        libtool \
+        llvm-${llvm_version} \
+        make \
+        openssh-clients \
+        patch \
+        pcre-devel \
+        pkg-config \
+        wget \
+        xz \
+        zip
 
 RUN set -eux; \
     if [ "${TARGETARCH}" = "amd64" ]; then \
-        dnf --enablerepo=powertools install -y \
+        dnf --enablerepo=crb install -y \
             mingw64-gcc; \
     fi
 
@@ -196,13 +189,13 @@ RUN set -eux; \
 # Install ginkgo v2 as ginkgo2 and keep ginkgo v1 as ginkgo
 RUN set -eux; \
     k8s_libs_version=$(yq -r .kubernetes.version /etc/versions.yaml | sed 's/^1/0/'); \
-    go install github.com/onsi/ginkgo/v2/ginkgo@v2.27.5 && mv /go/bin/ginkgo /go/bin/ginkgo2 && \
+    go install github.com/onsi/ginkgo/v2/ginkgo@v2.28.1 && mv /go/bin/ginkgo /go/bin/ginkgo2 && \
     go install github.com/onsi/ginkgo/ginkgo@v1.16.5 && \
     go install github.com/jstemmer/go-junit-report@v1.0.0 && \
     go install github.com/wadey/gocovmerge@v0.0.0-20160331181800-b5bfa59ec0ad && \
-    go install golang.org/x/tools/cmd/goimports@v0.41.0 && \
-    go install golang.org/x/tools/cmd/stringer@v0.41.0 && \
-    go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.0 && \
+    go install golang.org/x/tools/cmd/goimports@v0.42.0 && \
+    go install golang.org/x/tools/cmd/stringer@v0.42.0 && \
+    go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.1 && \
     go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11 && \
     go install gotest.tools/gotestsum@v1.13.0 && \
     go install k8s.io/code-generator/cmd/client-gen@v${k8s_libs_version} && \
@@ -226,9 +219,6 @@ RUN sed -i 's/^CREATE_MAIL_SPOOL=yes/CREATE_MAIL_SPOOL=no/' /etc/default/useradd
 # Allow validated remote servers
 COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
 
-# Copy bpftool for Felix UT/FV.
-COPY --from=bpftool /bpftool /usr/bin
-
 # Copy semvalidator release tool.
 COPY bin/semvalidator-${TARGETARCH} /usr/local/bin/semvalidator
 
@@ -241,6 +231,6 @@ ENV GOPATH=/go
 ENV GOTOOLCHAIN=local
 ENV PATH=$GOPATH/bin:/usr/local/go/bin:$PATH
 
-COPY --from=ubi / /
+COPY --from=builder / /
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
