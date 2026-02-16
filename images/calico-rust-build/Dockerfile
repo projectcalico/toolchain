@@ -1,20 +1,19 @@
-FROM registry.access.redhat.com/ubi9/ubi:latest AS ubi
+FROM almalinux:9 AS builder
 
 ARG TARGETARCH
 
-ARG PROTOC_VERSION=32.1
-ARG YQ_VERSION=v4.48.1
+ARG PROTOC_VERSION=33.5
 
-RUN dnf upgrade -y && dnf install -y \
+RUN dnf upgrade -y && dnf install -y epel-release && \
+    dnf install -y yq
+
+RUN dnf install -y \
     bsdtar \
     gcc \
     make \
     wget
 
 RUN dnf clean all
-
-# Install yq and copy versions.yaml
-RUN curl -sfL https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${TARGETARCH} -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq
 
 COPY versions.yaml /etc/versions.yaml
 
@@ -89,4 +88,4 @@ ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV PATH=/usr/local/cargo/bin:$PATH
 
-COPY --from=ubi / /
+COPY --from=builder / /
