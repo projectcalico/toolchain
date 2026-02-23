@@ -19,10 +19,16 @@ jobs:
       fail-fast: false
 
     steps:
-      - name: Checkout repository
+      - name: Checkout target branch
         uses: actions/checkout@v4
         with:
           ref: ${{ matrix.branch }}
+
+      - name: Fetch update script from master
+        run: |
+          git fetch origin master
+          git show origin/master:hack/check-version-updates.sh > /tmp/check-version-updates.sh
+          chmod +x /tmp/check-version-updates.sh
 
       - name: Install yq
         uses: mikefarah/yq@master
@@ -30,7 +36,7 @@ jobs:
       - name: Check for version updates
         id: check-updates
         run: |
-          output=$(hack/check-version-updates.sh -f images/calico-go-build/versions.yaml)
+          output=$(/tmp/check-version-updates.sh -f images/calico-go-build/versions.yaml)
           echo "$output"
 
           # Extract the updates summary if present
@@ -47,6 +53,7 @@ jobs:
         if: steps.check-updates.outputs.summary != ''
         uses: peter-evans/create-pull-request@v7
         with:
+          token: ${{ secrets.MARVIN_PAT }}
           commit-message: |
             Update versions in calico-go-build
 
