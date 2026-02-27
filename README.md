@@ -51,12 +51,6 @@ For example, if you registered the `s390x` emulator at `/usr/bin/qemu-s390x-stat
 To register emulators, we run:
 
 ```bash
-docker run --privileged --rm tonistiigi/binfmt --install all
-```
-
-or simply
-
-```bash
 make register
 ```
 
@@ -69,7 +63,8 @@ To _run_ a binary from a different architecture, you need to use `binfmt` and `q
 Register `qemu-*-static` for all supported processors except the current one using the following command:
 
 ```bash
-docker run --privileged --rm tonistiigi/binfmt --install all
+# Replace qemu-vx.y.z with the latest tag from https://hub.docker.com/r/calico/binfmt/tags
+docker run --privileged --rm calico/binfmt:qemu-vx.y.z --install all
 ```
 
 If a cross built binary is executed in the go-build container qemu-static will automatically be used.
