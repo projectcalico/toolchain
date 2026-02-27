@@ -1,0 +1,67 @@
+name: Check for Go and Kubernetes version updates
+
+on:
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+jobs:
+  check-updates:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    strategy:
+      matrix:
+        branch:
+          - go1.24-k8s1.32
+      fail-fast: false
+
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+
+      - name: Fetch update script from master
+        run: |
+          git fetch origin master
+          git show origin/master:hack/check-version-updates.sh > /tmp/check-version-updates.sh
+          chmod +x /tmp/check-version-updates.sh
+
+      - name: Install yq
+        uses: mikefarah/yq@master
+
+      - name: Check for version updates
+        id: check-updates
+        run: |
+          output=$(/tmp/check-version-updates.sh -f images/calico-go-build/versions.yaml)
+          echo "$output"
+
+          # Extract the updates summary if present
+          if echo "$output" | grep -q "UPDATES_SUMMARY_START"; then
+            summary=$(echo "$output" | sed -n '/UPDATES_SUMMARY_START/,/UPDATES_SUMMARY_END/{/UPDATES_SUMMARY_START/d;/UPDATES_SUMMARY_END/d;p;}')
+            {
+              echo "summary<<EOF"
+              echo "$summary"
+              echo "EOF"
+            } >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Pull Request
+        if: steps.check-updates.outputs.summary != ''
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.MARVIN_PAT }}
+          commit-message: |
+            Update versions in calico-go-build
+
+            ${{ steps.check-updates.outputs.summary }}
+          branch: auto-update-versions-${{ matrix.branch }}
+          base: ${{ matrix.branch }}
+          title: "[${{ matrix.branch }}] Auto-update Go/Kubernetes versions"
+          body: |
+            Automated version update for `${{ matrix.branch }}`:
+
+            ${{ steps.check-updates.outputs.summary }}
