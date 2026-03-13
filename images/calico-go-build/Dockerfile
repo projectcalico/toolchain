@@ -4,10 +4,10 @@ FROM almalinux:9 AS builder
 
 ARG TARGETARCH
 
-ARG CONTAINERREGISTRY_VERSION=v0.20.7
+ARG CONTAINERREGISTRY_VERSION=v0.21.2
 ARG CONTROLLER_TOOLS_VERSION=v0.18.0
 ARG GINKGO_VERSION=v2.28.1
-ARG GO_LINT_VERSION=v2.10.1
+ARG GO_LINT_VERSION=v2.11.3
 ARG MOCKERY_VERSION=3.6.4
 ARG PROTOC_VERSION=33.5
 
@@ -192,11 +192,12 @@ RUN set -eux; \
     go install github.com/jstemmer/go-junit-report@v1.0.0 && \
     go install github.com/onsi/ginkgo/v2/ginkgo@${GINKGO_VERSION} && \
     go install github.com/wadey/gocovmerge@v0.0.0-20160331181800-b5bfa59ec0ad && \
-    go install golang.org/x/tools/cmd/goimports@v0.42.0 && \
-    go install golang.org/x/tools/cmd/stringer@v0.42.0 && \
+    go install golang.org/x/tools/cmd/goimports@v0.43.0 && \
+    go install golang.org/x/tools/cmd/stringer@v0.43.0 && \
     go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.1 && \
     go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11 && \
     go install gotest.tools/gotestsum@v1.13.0 && \
+    go install k8s.io/code-generator/cmd/applyconfiguration-gen@v${k8s_libs_version} && \
     go install k8s.io/code-generator/cmd/client-gen@v${k8s_libs_version} && \
     go install k8s.io/code-generator/cmd/conversion-gen@v${k8s_libs_version} && \
     go install k8s.io/code-generator/cmd/deepcopy-gen@v${k8s_libs_version} && \
