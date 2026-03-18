@@ -2,7 +2,7 @@ ARG TARGETARCH=${TARGETARCH}
 
 FROM calico/bpftool:v7.4.0 AS bpftool
 
-FROM registry.access.redhat.com/ubi8/ubi:latest AS ubi
+FROM almalinux:8 AS builder
 
 ARG TARGETARCH
 
@@ -16,46 +16,38 @@ ARG YQ_VERSION=v4.50.1
 
 ENV PATH=/usr/local/go/bin:$PATH
 
-# Install system dependencies
-RUN dnf upgrade -y && dnf install -y \
-    autoconf \
-    automake \
-    bsdtar \
-    gcc \
-    gcc-c++ \
-    git \
-    iputils \
-    jq \
-    libcurl-devel \
-    libpcap-devel \
-    libtool \
-    make \
-    openssh-clients \
-    patch \
-    pcre-devel \
-    pkg-config \
-    wget \
-    xz \
-    zip
-
 # Install yq and copy versions.yaml
 RUN curl -sfL https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${TARGETARCH} -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq
-
 COPY versions.yaml /etc/versions.yaml
-
-# Install system dependencies that are not in UBI repos
-COPY almalinux/RPM-GPG-KEY-AlmaLinux /etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux
-COPY almalinux/almalinux*.repo /etc/yum.repos.d/
 
 RUN set -eux; \
     llvm_version=$(yq -r .llvm.version /etc/versions.yaml); \
-    dnf --enablerepo=baseos,powertools,appstream install -y \
-    clang-${llvm_version} \
-    elfutils-libelf-devel \
-    iproute-devel \
-    iproute-tc \
-    libbpf-devel \
-    llvm-${llvm_version}
+    dnf upgrade -y && dnf --enablerepo=powertools install -y \
+        autoconf \
+        automake \
+        bsdtar \
+        clang-${llvm_version} \
+        elfutils-libelf-devel \
+        gcc \
+        gcc-c++ \
+        git \
+        iproute-devel \
+        iproute-tc \
+        iputils \
+        jq \
+        libbpf-devel \
+        libcurl-devel \
+        libpcap-devel \
+        libtool \
+        llvm-${llvm_version} \
+        make \
+        openssh-clients \
+        patch \
+        pcre-devel \
+        pkg-config \
+        wget \
+        xz \
+        zip
 
 RUN set -eux; \
     if [ "${TARGETARCH}" = "amd64" ]; then \
@@ -240,6 +232,6 @@ ENV GOPATH=/go
 ENV GOTOOLCHAIN=local
 ENV PATH=$GOPATH/bin:/usr/local/go/bin:$PATH
 
-COPY --from=ubi / /
+COPY --from=builder / /
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
