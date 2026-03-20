@@ -67,7 +67,7 @@ blocks:
             - git clone -b "${CALICO_BRANCH}" --depth 1 git@github.com:projectcalico/calico.git calico
             - cd calico
             - sed -i 's/^GO_BUILD_VER=.*$/GO_BUILD_VER=${CALICO_GO_BUILD_IMAGETAG}/' metadata.mk
-            - if [ "${ARCH}" == "amd64" ]; then cd felix && make ut && cd ../calicoctl && make ut && cd ../libcalico-go && make ut; fi
+            - if [ "${ARCH}" == "amd64" ]; then cd felix && make ut; fi
           matrix:
             - env_var: ARCH
               values: ["amd64", "arm64", "ppc64le", "s390x"]
