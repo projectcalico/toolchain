@@ -34,7 +34,7 @@ go_minor="${current_go_ver%.*}"
 
 echo "Checking Go updates for ${go_minor}.x series (current: ${current_go_ver})..."
 
-go_api_response=$(curl -sf "https://go.dev/dl/?mode=json&include=all")
+go_api_response=$(curl -sf "https://go.dev/dl/?mode=json&include=all") || { echo "ERROR: Failed to fetch Go releases" >&2; exit 1; }
 
 # Find latest stable release in the current minor series (sort numerically by patch version)
 latest_go_ver=$(echo "$go_api_response" | jq -r --arg minor "go${go_minor}" \
@@ -81,7 +81,7 @@ k8s_minor="${current_k8s_ver%.*}"
 
 echo "Checking Kubernetes updates for ${k8s_minor}.x series (current: ${current_k8s_ver})..."
 
-latest_k8s_ver=$(curl -sf "https://dl.k8s.io/release/stable-${k8s_minor}.txt")
+latest_k8s_ver=$(curl -sf "https://dl.k8s.io/release/stable-${k8s_minor}.txt") || { echo "ERROR: Failed to fetch Kubernetes stable version" >&2; exit 1; }
 
 if [[ -z "$latest_k8s_ver" ]]; then
     echo "Could not fetch latest Kubernetes ${k8s_minor}.x version"
