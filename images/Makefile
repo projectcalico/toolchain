@@ -35,15 +35,14 @@ else ifeq ($(ARCH),s390)
 	override LDSONAME=ld64.so.1
 endif
 
-UBI_VERSIONS ?= ubi8 ubi9 ubi10
+UBI_VERSIONS ?= ubi9 ubi10
 
 .PHONY: calico-base-image
 calico-base-image: $(addprefix calico-base-image-,$(UBI_VERSIONS))
 
 .PHONY: calico-base-image-%
 calico-base-image-%: register
-	$(eval DOCKERFILE := $(if $(filter ubi8,$*),Dockerfile.ubi8,Dockerfile))
-	$(DOCKER_BUILD) --build-arg LDSONAME=$(LDSONAME) --build-arg=UBI_VERSION=$* -t $(CALICO_BASE):$*-latest-$(ARCH) -f calico-base/$(DOCKERFILE) calico-base/
+	$(DOCKER_BUILD) --build-arg LDSONAME=$(LDSONAME) --build-arg=UBI_VERSION=$* -t $(CALICO_BASE):$*-latest-$(ARCH) -f calico-base/Dockerfile calico-base/
 	$(MAKE) BUILD_IMAGES=$(CALICO_BASE) retag-build-images-with-registries VALIDARCHES=$(ARCH) LATEST_IMAGE_TAG=$*-latest IMAGETAG=$*-latest
 
 .PHONY: calico-base-image-all
