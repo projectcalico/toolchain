@@ -15,6 +15,7 @@ jobs:
     strategy:
       matrix:
         branch:
+          - master
           - go1.26
           - go1.25
           - go1.25-k8s1.34
@@ -23,7 +24,7 @@ jobs:
 
     steps:
       - name: Checkout target branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ matrix.branch }}
 
@@ -51,7 +52,7 @@ jobs:
 
       - name: Create Pull Request
         if: steps.check-updates.outputs.summary != ''
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.MARVIN_PAT }}
           commit-message: |
