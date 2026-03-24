@@ -196,7 +196,7 @@ RUN set -eux; \
 # Install ginkgo v2 as ginkgo2 and keep ginkgo v1 as ginkgo
 RUN set -eux; \
     k8s_libs_version=$(yq -r .kubernetes.version /etc/versions.yaml | sed 's/^1/0/'); \
-    go install github.com/onsi/ginkgo/v2/ginkgo@v2.27.5 && mv /go/bin/ginkgo /go/bin/ginkgo2 && \
+    go install github.com/onsi/ginkgo/v2/ginkgo@v2.28.1 && mv /go/bin/ginkgo /go/bin/ginkgo2 && \
     go install github.com/onsi/ginkgo/ginkgo@v1.16.5 && \
     go install github.com/jstemmer/go-junit-report@v1.0.0 && \
     go install github.com/wadey/gocovmerge@v0.0.0-20160331181800-b5bfa59ec0ad && \
