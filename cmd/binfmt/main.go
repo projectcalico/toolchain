@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/containerd/platforms"
 	"github.com/moby/buildkit/util/archutil"
@@ -84,7 +85,7 @@ func install(arch string) error {
 		}
 		return errors.Errorf("Cannot open %s: %s", register, err)
 	}
-	defer func() { _ = file.Close() }()
+	defer file.Close()
 
 	flags := "CF"
 	if v := os.Getenv("QEMU_PRESERVE_ARGV0"); v != "" {
@@ -206,7 +207,7 @@ func run() error {
 		if err := syscall.Mount("binfmt_misc", mount, "binfmt_misc", 0, ""); err != nil {
 			return errors.Wrapf(err, "cannot mount binfmt_misc filesystem at %s", mount)
 		}
-		defer func() { _ = syscall.Unmount(mount, 0) }()
+		defer syscall.Unmount(mount, 0)
 	}
 
 	for _, name := range parseUninstall(toUninstall) {
@@ -223,6 +224,14 @@ func run() error {
 		installArchs = allArch()
 	} else {
 		installArchs = parseArch(toInstall)
+	}
+
+	// best effort workaround for kernels that do not immediately expose new
+	// binfmt_misc entries after register writes until the mountpoint is touched:
+	// https://github.com/amazonlinux/amazon-linux-2023/issues/479#issuecomment-2707623971
+	if len(installArchs) > 0 {
+		now := time.Now()
+		_ = os.Chtimes(mount, now, now)
 	}
 
 	for _, name := range installArchs {
