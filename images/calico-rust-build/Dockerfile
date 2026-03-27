@@ -2,7 +2,7 @@ FROM almalinux:9 AS builder
 
 ARG TARGETARCH
 
-ARG PROTOC_VERSION=33.5
+ARG PROTOC_VERSION=34.1
 
 RUN dnf upgrade -y && dnf install -y epel-release && \
     dnf install -y yq
@@ -26,24 +26,24 @@ RUN set -eux; \
     case "${TARGETARCH}" in \
     'amd64') \
         rustup_arch='x86_64-unknown-linux-gnu'; \
-        rustup_sha256='20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c'; \
+        rustup_sha256='4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10'; \
         ;; \
     'arm64') \
         rustup_arch='aarch64-unknown-linux-gnu'; \
-        rustup_sha256='e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c'; \
+        rustup_sha256='9732d6c5e2a098d3521fca8145d826ae0aaa067ef2385ead08e6feac88fa5792'; \
         ;; \
     'ppc64le') \
         rustup_arch='powerpc64le-unknown-linux-gnu'; \
-        rustup_sha256='acd89c42b47c93bd4266163a7b05d3f26287d5148413c0d47b2e8a7aa67c9dc0'; \
+        rustup_sha256='4bfff85bd3967d988e14567aa9cc6ab0ea386f0ffeff0f9f14d23f0103bf1f97'; \
         ;; \
     's390x') \
         rustup_arch='s390x-unknown-linux-gnu'; \
-        rustup_sha256='726b7fd5d8805e73eab4a024a2889f8859d5a44e36041abac0a2436a52d42572'; \
+        rustup_sha256='66c2c132428b6b77803facb02cbdf33b89d20c00bd20da142be8cb651f2e7cd8'; \
         ;; \
     *) echo >&2 "error: unsupported architecture '${TARGETARCH}'"; exit 1 ;; \
     esac; \
     \
-    url="https://static.rust-lang.org/rustup/archive/1.28.2/${rustup_arch}/rustup-init"; \
+    url="https://static.rust-lang.org/rustup/archive/1.29.0/${rustup_arch}/rustup-init"; \
     wget --progress=dot:giga "$url"; \
     echo "${rustup_sha256} *rustup-init" | sha256sum -c -; \
     \
