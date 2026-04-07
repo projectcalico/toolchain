@@ -1,4 +1,4 @@
 qemu:
-  version: 10.1.4
+  version: 10.1.5
 tonistiigi-binfmt:
-  version: 49eb232
+  version: 3a63696
