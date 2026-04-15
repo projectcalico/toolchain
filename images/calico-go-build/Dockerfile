@@ -12,6 +12,8 @@ ARG MOCKERY_VERSION=3.6.4
 ARG PROTOC_VERSION=33.5
 
 ENV PATH=/usr/local/go/bin:$PATH
+ENV CC=clang
+ENV CXX=clang++
 
 # Install system dependencies
 COPY versions.yaml /etc/versions.yaml
@@ -28,9 +30,8 @@ RUN set -eux; \
         bsdtar \
         ccache \
         clang-${llvm_version} \
+        cpio \
         elfutils-libelf-devel \
-        gcc \
-        gcc-c++ \
         git \
         iproute-devel \
         iproute-tc \
@@ -40,6 +41,7 @@ RUN set -eux; \
         libcurl-devel \
         libpcap-devel \
         libtool \
+        lld-${llvm_version} \
         llvm-${llvm_version} \
         make \
         openssh-clients \
@@ -50,10 +52,65 @@ RUN set -eux; \
         xz \
         zip
 
+# Install cross-compilation sysroots for arm64, ppc64le, and s390x (amd64 only).
+# This enables native-speed Go+CGO cross-compilation instead of QEMU emulation,
+# which is ~10-15x faster (e.g. 2-3 min vs 30+ min for calico-node).
+#
+# Clang (already installed above) is used as the cross-compiler — it is a native
+# cross-compiler and doesn't need per-arch GCC toolchains.  We download target-arch
+# RPMs from AlmaLinux mirrors and extract them into per-arch sysroot directories.
 RUN set -eux; \
     if [ "${TARGETARCH}" = "amd64" ]; then \
         dnf --enablerepo=crb install -y \
             mingw64-gcc; \
+        # Download and extract target-arch C runtime, kernel headers, and
+        # libraries needed for CGO cross-linking.
+        for arch in aarch64 ppc64le s390x; do \
+            case "${arch}" in \
+                aarch64)   triple=aarch64-linux-gnu ;; \
+                ppc64le)   triple=powerpc64le-linux-gnu ;; \
+                s390x)     triple=s390x-linux-gnu ;; \
+            esac; \
+            sysroot="/usr/${triple}/sys-root"; \
+            mkdir -p "${sysroot}"; \
+            tmpdir=$(mktemp -d); \
+            dnf download --destdir="${tmpdir}" \
+                --repofrompath="alma-${arch}-baseos,https://repo.almalinux.org/almalinux/9/BaseOS/${arch}/os/" \
+                --repofrompath="alma-${arch}-appstream,https://repo.almalinux.org/almalinux/9/AppStream/${arch}/os/" \
+                --repofrompath="alma-${arch}-crb,https://repo.almalinux.org/almalinux/9/CRB/${arch}/os/" \
+                --repo="alma-${arch}-baseos" \
+                --repo="alma-${arch}-appstream" \
+                --repo="alma-${arch}-crb" \
+                --setopt="alma-${arch}-baseos.gpgcheck=1" \
+                --setopt="alma-${arch}-baseos.gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-9" \
+                --setopt="alma-${arch}-appstream.gpgcheck=1" \
+                --setopt="alma-${arch}-appstream.gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-9" \
+                --setopt="alma-${arch}-crb.gpgcheck=1" \
+                --setopt="alma-${arch}-crb.gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-9" \
+                --forcearch="${arch}" \
+                gcc libgcc \
+                glibc glibc-devel \
+                kernel-headers \
+                elfutils-libelf elfutils-libelf-devel \
+                libpcap libpcap-devel \
+                zlib zlib-devel; \
+            for rpm in "${tmpdir}"/*.rpm; do \
+                rpm2cpio "${rpm}" | cpio -idm -D "${sysroot}"; \
+            done; \
+            rm -rf "${tmpdir}"; \
+            # Replicate AlmaLinux's usrmerge layout (/lib64 → usr/lib64) so that
+            # absolute paths in glibc's linker scripts resolve under --sysroot.
+            for dir in lib lib64; do \
+                if [ -d "${sysroot}/${dir}" ] && [ ! -L "${sysroot}/${dir}" ]; then \
+                    mkdir -p "${sysroot}/usr/${dir}"; \
+                    cp -a "${sysroot}/${dir}/." "${sysroot}/usr/${dir}/"; \
+                    rm -rf "${sysroot}/${dir}"; \
+                fi; \
+                if [ ! -e "${sysroot}/${dir}" ]; then \
+                    ln -s "usr/${dir}" "${sysroot}/${dir}"; \
+                fi; \
+            done; \
+        done; \
     fi
 
 # Install Google Cloud SDK for GCR/GAR
@@ -124,7 +181,7 @@ RUN mkdir -p "$GOPATH/src" "$GOPATH/bin" && chmod -R 1777 "$GOPATH"
 # su-exec is used by the entrypoint script to execute the user's command with the right UID/GID.
 RUN set -eux; \
     curl -sfL https://raw.githubusercontent.com/ncopa/su-exec/master/su-exec.c -o /tmp/su-exec.c; \
-    gcc -Wall -O2 /tmp/su-exec.c -o /usr/bin/su-exec; \
+    clang -Wall -O2 /tmp/su-exec.c -o /usr/bin/su-exec; \
     rm -f /tmp/su-exec.c
 
 # Install Protocol Buffers compiler
@@ -229,6 +286,8 @@ FROM scratch
 
 ENV GOPATH=/go
 ENV GOTOOLCHAIN=local
+ENV CC=clang
+ENV CXX=clang++
 ENV PATH=$GOPATH/bin:/usr/local/go/bin:$PATH
 
 COPY --from=builder / /
