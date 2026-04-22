@@ -27,7 +27,7 @@ blocks:
     task:
       env_vars:
         - name: BRANCH_NAME
-          value: latest
+          value: ${SEMAPHORE_JOB_CREATION_TIME}
       jobs:
         - name: Linux multi-arch
           commands:
