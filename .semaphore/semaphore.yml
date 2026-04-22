@@ -23,12 +23,6 @@ global_job_config:
       # Semaphore is doing shallow clone on a commit without tags.
       # unshallow it for GIT_VERSION:=$(shell git describe --tags --dirty --always) @ Makefile.common
       - git fetch --unshallow
-      - |
-        if [ "${SEMAPHORE_GIT_REF_TYPE}" = "tag" ]; then
-          export VERSION_TAG=${SEMAPHORE_GIT_TAG_NAME}
-        else
-          export VERSION_TAG=${SEMAPHORE_GIT_WORKING_BRANCH}
-        fi
 
 promotions:
   # Publish images for master or release tags (example: 1.23.3-llvm18.1.8-k8s1.30.5).
@@ -49,13 +43,21 @@ blocks:
         # The branch to test the current go-build against
         - name: CALICO_BRANCH
           value: release-v3.31
+      prologue:
+        commands:
+          - |
+            if [ "${SEMAPHORE_GIT_REF_TYPE}" = "tag" ]; then
+              export CALICO_GO_BUILD_IMAGETAG=${SEMAPHORE_GIT_TAG_NAME}
+            else
+              export CALICO_GO_BUILD_IMAGETAG=${SEMAPHORE_GIT_WORKING_BRANCH}
+            fi
       jobs:
         - name: Build calico/go-build image
           commands:
             - make -C images calico-go-build-image ARCH=$ARCH
             - git clone -b "${CALICO_BRANCH}" --depth 1 git@github.com:projectcalico/calico.git calico
             - cd calico
-            - sed -i 's/^GO_BUILD_VER=.*$/GO_BUILD_VER=${VERSION_TAG}/' metadata.mk
+            - sed -i 's/^GO_BUILD_VER=.*$/GO_BUILD_VER=${CALICO_GO_BUILD_IMAGETAG}/' metadata.mk
             - if [ "${ARCH}" == "amd64" ]; then cd felix && make ut && cd ../calicoctl && make ut && cd ../libcalico-go && make ut; fi
           matrix:
             - env_var: ARCH

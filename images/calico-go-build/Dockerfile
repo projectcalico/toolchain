@@ -6,11 +6,12 @@ FROM registry.access.redhat.com/ubi8/ubi:latest AS ubi
 
 ARG TARGETARCH
 
-ARG CONTAINERREGISTRY_VERSION=v0.20.6
-ARG CONTROLLER_TOOLS_VERSION=v0.17.3
-ARG GO_LINT_VERSION=v1.64.8
-ARG MOCKERY_VERSION=2.53.4
-ARG YQ_VERSION=v4.45.4
+ARG CONTAINERREGISTRY_VERSION=v0.20.7
+ARG CONTROLLER_TOOLS_VERSION=v0.18.0
+ARG GO_LINT_VERSION=v2.8.0
+ARG MOCKERY_VERSION=3.5.5
+ARG PROTOC_VERSION=33.4
+ARG YQ_VERSION=v4.50.1
 
 ENV PATH=/usr/local/go/bin:$PATH
 
@@ -18,6 +19,7 @@ ENV PATH=/usr/local/go/bin:$PATH
 RUN dnf upgrade -y && dnf install -y \
     autoconf \
     automake \
+    bsdtar \
     gcc \
     gcc-c++ \
     git \
@@ -31,7 +33,6 @@ RUN dnf upgrade -y && dnf install -y \
     patch \
     pcre-devel \
     pkg-config \
-    protobuf-compiler \
     wget \
     xz \
     zip
@@ -53,8 +54,7 @@ RUN set -eux; \
     iproute-devel \
     iproute-tc \
     libbpf-devel \
-    llvm-${llvm_version} \
-    protobuf-devel
+    llvm-${llvm_version}
 
 RUN set -eux; \
     if [ "${TARGETARCH}" = "amd64" ]; then \
@@ -133,6 +133,28 @@ RUN set -eux; \
     gcc -Wall -O2 /tmp/su-exec.c -o /usr/bin/su-exec; \
     rm -f /tmp/su-exec.c
 
+# Install Protocol Buffers compiler
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+    'amd64') \
+        url="https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip"; \
+        ;; \
+    'arm64') \
+        url="https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-aarch_64.zip"; \
+        ;; \
+    'ppc64le') \
+        url="https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-ppcle_64.zip"; \
+        ;; \
+    's390x') \
+        url="https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-s390_64.zip"; \
+        ;; \
+    *) echo >&2 "error: unsupported architecture '${TARGETARCH}'"; exit 1 ;; \
+    esac; \
+    \
+    curl -sfL "$url" | bsdtar -xf - -C /usr && chmod +x /usr/bin/protoc; \
+    \
+    protoc --version
+
 # Install Go utilities
 
 # controller-gen is used for generating CRD files.
@@ -174,23 +196,23 @@ RUN set -eux; \
 # Install ginkgo v2 as ginkgo2 and keep ginkgo v1 as ginkgo
 RUN set -eux; \
     k8s_libs_version=$(yq -r .kubernetes.version /etc/versions.yaml | sed 's/^1/0/'); \
-    go install github.com/onsi/ginkgo/v2/ginkgo@v2.23.4 && mv /go/bin/ginkgo /go/bin/ginkgo2 && \
+    go install github.com/onsi/ginkgo/v2/ginkgo@v2.28.1 && mv /go/bin/ginkgo /go/bin/ginkgo2 && \
     go install github.com/onsi/ginkgo/ginkgo@v1.16.5 && \
     go install github.com/jstemmer/go-junit-report@v1.0.0 && \
     go install github.com/wadey/gocovmerge@v0.0.0-20160331181800-b5bfa59ec0ad && \
-    go install golang.org/x/tools/cmd/goimports@v0.33.0 && \
-    go install golang.org/x/tools/cmd/stringer@v0.33.0 && \
-    go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1 && \
-    go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.6 && \
-    go install gotest.tools/gotestsum@v1.12.2 && \
+    go install golang.org/x/tools/cmd/goimports@v0.41.0 && \
+    go install golang.org/x/tools/cmd/stringer@v0.41.0 && \
+    go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.0 && \
+    go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11 && \
+    go install gotest.tools/gotestsum@v1.13.0 && \
     go install k8s.io/code-generator/cmd/client-gen@v${k8s_libs_version} && \
     go install k8s.io/code-generator/cmd/conversion-gen@v${k8s_libs_version} && \
     go install k8s.io/code-generator/cmd/deepcopy-gen@v${k8s_libs_version} && \
     go install k8s.io/code-generator/cmd/defaulter-gen@v${k8s_libs_version} && \
     go install k8s.io/code-generator/cmd/informer-gen@v${k8s_libs_version} && \
     go install k8s.io/code-generator/cmd/lister-gen@v${k8s_libs_version} && \
-    go install k8s.io/kube-openapi/cmd/openapi-gen@v0.0.0-20250318190949-c8a335a9a2ff && \
-    go install mvdan.cc/gofumpt@v0.8.0
+    go install k8s.io/kube-openapi/cmd/openapi-gen@v0.0.0-20251125145642-4e65d59e963e && \
+    go install mvdan.cc/gofumpt@v0.9.2
 
 # Cleanup module cache after we have built and installed all Go utilities
 RUN go clean -modcache && go clean -cache
