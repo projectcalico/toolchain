@@ -27,19 +27,6 @@ blocks:
       when: "branch = 'master' AND change_in('/images/calico-rust-build/')"
     task:
       jobs:
-        - name: Linux multi-arch
+        - name: Linux amd64
           commands:
-            - if [ -z "${SEMAPHORE_GIT_PR_NUMBER}" ]; then make -C images calico-rust-build-cd VALIDARCHES=$ARCH CONFIRM=true; fi
-          matrix:
-            - env_var: ARCH
-              values: ["amd64", "arm64", "ppc64le", "s390x"]
-  - name: Publish calico/rust-build multi-arch manifests
-    dependencies:
-      - Publish calico/rust-build images
-    run:
-      when: "branch = 'master' AND change_in('/images/calico-rust-build/')"
-    task:
-      jobs:
-        - name: Linux multi-arch manifests
-          commands:
-            - if [ -z "${SEMAPHORE_GIT_PR_NUMBER}" ]; then make -C images push-calico-rust-build-manifests CONFIRM=true; fi
+            - if [ -z "${SEMAPHORE_GIT_PR_NUMBER}" ]; then make -C images calico-rust-build-cd CONFIRM=true; fi

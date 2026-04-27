@@ -17,7 +17,7 @@ build:
 image: calico-base-image calico-binfmt-image calico-go-build-image calico-rust-build-image
 
 .PHONY: image-all
-image-all: calico-base-image-all calico-binfmt-image calico-go-build-image-all calico-rust-build-image-all
+image-all: calico-base-image-all calico-binfmt-image calico-go-build-image-all calico-rust-build-image
 
 ################################################################################
 # Base image for all Calico components.
@@ -108,23 +108,15 @@ calico-binfmt-cd: calico-binfmt-image var-require-one-of-CONFIRM-DRYRUN
 
 CALICO_RUST_BUILD_IMAGETAG ?= latest
 
+# We only build for amd64; the image cross-compiles to aarch64 via clang/lld.
 .PHONY: calico-rust-build-image
-calico-rust-build-image: register
-	$(DOCKER_BUILD) -t $(CALICO_RUST_BUILD):latest-$(ARCH) -f calico-rust-build/Dockerfile calico-rust-build/
-	$(MAKE) BUILD_IMAGES=$(CALICO_RUST_BUILD) retag-build-images-with-registries VALIDARCHES=$(ARCH) IMAGETAG=$(CALICO_RUST_BUILD_IMAGETAG)
-
-.PHONY: calico-rust-build-image-all
-calico-rust-build-image-all: $(addprefix sub-calico-rust-build-image-,$(VALIDARCHES))
-sub-calico-rust-build-image-%:
-	$(MAKE) calico-rust-build-image ARCH=$*
+calico-rust-build-image:
+	$(DOCKER_BUILD) -t $(CALICO_RUST_BUILD):latest-amd64 -f calico-rust-build/Dockerfile calico-rust-build/
+	$(MAKE) BUILD_IMAGES=$(CALICO_RUST_BUILD) retag-build-images-with-registries VALIDARCHES=amd64 IMAGETAG=$(CALICO_RUST_BUILD_IMAGETAG)
 
 .PHONY: calico-rust-build-cd
 calico-rust-build-cd: calico-rust-build-image var-require-one-of-CONFIRM-DRYRUN var-require-all-BRANCH_NAME
-	$(MAKE) BUILD_IMAGES=$(CALICO_RUST_BUILD) retag-build-images-with-registries push-images-to-registries IMAGETAG=$(BRANCH_NAME) EXCLUDEARCH="$(EXCLUDEARCH)"
-
-.PHONY: push-calico-rust-build-manifests
-push-calico-rust-build-manifests: var-require-one-of-CONFIRM-DRYRUN var-require-all-BRANCH_NAME
-	$(MAKE) BUILD_IMAGES=$(CALICO_RUST_BUILD) push-manifests IMAGETAG=$(BRANCH_NAME) EXCLUDEARCH="$(EXCLUDEARCH)"
+	$(MAKE) BUILD_IMAGES=$(CALICO_RUST_BUILD) retag-build-images-with-registries push-images-to-registries IMAGETAG=$(BRANCH_NAME) VALIDARCHES=amd64 EXCLUDEARCH="$(EXCLUDEARCH)"
 
 ################################################################################
 # Clean up

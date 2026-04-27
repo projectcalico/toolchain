@@ -84,12 +84,9 @@ blocks:
               export CALICO_RUST_BUILD_IMAGETAG=${SEMAPHORE_GIT_WORKING_BRANCH}
             fi
       jobs:
-        - name: Build calico/rust-build image
+        - name: Build calico/rust-build amd64 image
           commands:
-            - make -C images calico-rust-build-image ARCH=$ARCH
-          matrix:
-            - env_var: ARCH
-              values: ["amd64", "arm64", "ppc64le", "s390x"]
+            - make -C images calico-rust-build-image
 
   - name: calico/base image
     dependencies: []
