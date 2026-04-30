@@ -178,6 +178,43 @@ ENV GOPATH=/go
 ENV PATH=$GOPATH/bin:$PATH
 RUN mkdir -p "$GOPATH/src" "$GOPATH/bin" && chmod -R 1777 "$GOPATH"
 
+# Install TinyGo for WebAssembly builds (amd64+arm64 only — upstream does not
+# ship ppc64le/s390x binaries; wasm output is arch-agnostic so a single host
+# arch suffices for any consumer).
+#
+# Two-step install: (1) bundle a newer libstdc++.so.6 from Debian trixie
+# because AlmaLinux 9's system libstdc++ (GCC 11, GLIBCXX_3.4.29) is too old
+# for TinyGo 0.37+ binaries (need GLIBCXX_3.4.30+); (2) extract the upstream
+# TinyGo release tarball into /usr/local. See versions.yaml `tinygo:` block
+# for the rationale and the bump path to AlmaLinux 10.
+RUN set -eux; \
+    if [ "${TARGETARCH}" = "amd64" ] || [ "${TARGETARCH}" = "arm64" ]; then \
+        case "${TARGETARCH}" in \
+            amd64) deb_arch_dir=x86_64-linux-gnu ;; \
+            arm64) deb_arch_dir=aarch64-linux-gnu ;; \
+        esac; \
+        libstdcpp_deb_ver=$(yq -r .tinygo.libstdcpp.deb_version /etc/versions.yaml); \
+        libstdcpp_sha256=$(yq -r ".tinygo.libstdcpp.sha256.${TARGETARCH}" /etc/versions.yaml); \
+        wget -q -O /tmp/libstdcpp6.deb \
+            "http://deb.debian.org/debian/pool/main/g/gcc-14/libstdc++6_${libstdcpp_deb_ver}_${TARGETARCH}.deb"; \
+        echo "${libstdcpp_sha256}  /tmp/libstdcpp6.deb" | sha256sum -c -; \
+        mkdir -p /tmp/libstdcpp-extract; \
+        cd /tmp/libstdcpp-extract; \
+        ar x /tmp/libstdcpp6.deb; \
+        tar -xf data.tar.*; \
+        cp ./usr/lib/${deb_arch_dir}/libstdc++.so.6.0.* /usr/lib64/; \
+        cd /; \
+        rm -rf /tmp/libstdcpp6.deb /tmp/libstdcpp-extract; \
+        ldconfig; \
+        tinygo_version=$(yq -r .tinygo.version /etc/versions.yaml); \
+        tinygo_sha256=$(yq -r ".tinygo.checksum.sha256.${TARGETARCH}" /etc/versions.yaml); \
+        wget -q -O /tmp/tinygo.tar.gz \
+            "https://github.com/tinygo-org/tinygo/releases/download/v${tinygo_version}/tinygo${tinygo_version}.linux-${TARGETARCH}.tar.gz"; \
+        echo "${tinygo_sha256}  /tmp/tinygo.tar.gz" | sha256sum -c -; \
+        tar -C /usr/local -xzf /tmp/tinygo.tar.gz; \
+        rm /tmp/tinygo.tar.gz; \
+    fi
+
 # su-exec is used by the entrypoint script to execute the user's command with the right UID/GID.
 RUN set -eux; \
     curl -sfL https://raw.githubusercontent.com/ncopa/su-exec/master/su-exec.c -o /tmp/su-exec.c; \
@@ -288,7 +325,7 @@ ENV GOPATH=/go
 ENV GOTOOLCHAIN=local
 ENV CC=clang
 ENV CXX=clang++
-ENV PATH=$GOPATH/bin:/usr/local/go/bin:$PATH
+ENV PATH=$GOPATH/bin:/usr/local/go/bin:/usr/local/tinygo/bin:$PATH
 
 COPY --from=builder / /
 
