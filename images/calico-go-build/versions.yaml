@@ -11,15 +11,23 @@ kubernetes:
 llvm:
   version: 20.1.8
 tinygo:
-  # Pinned to 0.34.0 — last release that runs against AlmaLinux 9's default
-  # libstdc++ (GCC 11, max GLIBCXX_3.4.29). TinyGo 0.37+ release binaries
-  # require GLIBCXX_3.4.30+ (GCC 12+). RHEL 9 ABI-freezes libstdc++ at the
-  # 11.X series — no newer libstdc++.so.6 runtime is shipped via official
-  # rpms (gcc-toolset-N packages ship dev/static libs only, no .so.6
-  # runtime). Bump path: AlmaLinux 10 base (ships GCC 14) unblocks newer
-  # TinyGo natively.
-  version: 0.34.0
+  version: 0.41.1
   checksum:
     sha256:
-      amd64: 8acd27a39090e1e5c3ca341e81350f813ec6a02bf8090c4fc7c4b1afd4186341
-      arm64: a84b5134dc5144a494e3b7e78579536aca34c77951ddd0b19c300209d8b541e1
+      amd64: e156d1d93a376eef639a4143d13be07e8c463fb6cf2d7d447698ed4474d23e91
+      arm64: 789733bc3b5bace0bd1835a267b3ea267804a7ef1cfe69bc522c295f5226d624
+  # libstdc++.so.6 runtime bundled from Debian trixie because AlmaLinux 9
+  # (RHEL ABI freeze) caps the system libstdc++ at GCC 11 / GLIBCXX_3.4.29.
+  # TinyGo 0.37+ release binaries are built against GCC 12+ and require
+  # GLIBCXX_3.4.30+ at runtime. AlmaLinux 9's gcc-toolset-N rpms ship
+  # dev/static libs only — no libstdc++.so.6 runtime — so installing them
+  # does not solve the problem. Forward-compat ABI guarantees: newer
+  # libstdc++.so.6 satisfies older GLIBCXX symbols, so dropping a 14.x
+  # libstdc++ in /usr/lib64 is safe for all consumers.
+  # Bump path: when go-build base moves to AlmaLinux 10 (ships GCC 14
+  # natively, GLIBCXX_3.4.32+), drop this Debian-bundled libstdc++.
+  libstdcpp:
+    deb_version: 14.2.0-19
+    sha256:
+      amd64: ab1fa05837aa7a92aae748fd07a18a35f7d18bb4a71c4724fe2bbf0e32089de0
+      arm64: 6669b0c52a2e7c6af9adfdabce3ff6e286065cdfbc7b85280862b5f799daebee

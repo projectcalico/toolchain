@@ -182,10 +182,30 @@ RUN mkdir -p "$GOPATH/src" "$GOPATH/bin" && chmod -R 1777 "$GOPATH"
 # ship ppc64le/s390x binaries; wasm output is arch-agnostic so a single host
 # arch suffices for any consumer).
 #
-# Pin tracks versions.yaml `tinygo.version`. See that file for the constraint
-# narrative around AlmaLinux 9's libstdc++ (GCC 11) and the 0.34.0 ceiling.
+# Two-step install: (1) bundle a newer libstdc++.so.6 from Debian trixie
+# because AlmaLinux 9's system libstdc++ (GCC 11, GLIBCXX_3.4.29) is too old
+# for TinyGo 0.37+ binaries (need GLIBCXX_3.4.30+); (2) extract the upstream
+# TinyGo release tarball into /usr/local. See versions.yaml `tinygo:` block
+# for the rationale and the bump path to AlmaLinux 10.
 RUN set -eux; \
     if [ "${TARGETARCH}" = "amd64" ] || [ "${TARGETARCH}" = "arm64" ]; then \
+        case "${TARGETARCH}" in \
+            amd64) deb_arch_dir=x86_64-linux-gnu ;; \
+            arm64) deb_arch_dir=aarch64-linux-gnu ;; \
+        esac; \
+        libstdcpp_deb_ver=$(yq -r .tinygo.libstdcpp.deb_version /etc/versions.yaml); \
+        libstdcpp_sha256=$(yq -r ".tinygo.libstdcpp.sha256.${TARGETARCH}" /etc/versions.yaml); \
+        wget -q -O /tmp/libstdcpp6.deb \
+            "http://deb.debian.org/debian/pool/main/g/gcc-14/libstdc++6_${libstdcpp_deb_ver}_${TARGETARCH}.deb"; \
+        echo "${libstdcpp_sha256}  /tmp/libstdcpp6.deb" | sha256sum -c -; \
+        mkdir -p /tmp/libstdcpp-extract; \
+        cd /tmp/libstdcpp-extract; \
+        ar x /tmp/libstdcpp6.deb; \
+        tar -xf data.tar.*; \
+        cp ./usr/lib/${deb_arch_dir}/libstdc++.so.6.0.* /usr/lib64/; \
+        cd /; \
+        rm -rf /tmp/libstdcpp6.deb /tmp/libstdcpp-extract; \
+        ldconfig; \
         tinygo_version=$(yq -r .tinygo.version /etc/versions.yaml); \
         tinygo_sha256=$(yq -r ".tinygo.checksum.sha256.${TARGETARCH}" /etc/versions.yaml); \
         wget -q -O /tmp/tinygo.tar.gz \
