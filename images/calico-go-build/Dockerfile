@@ -182,18 +182,10 @@ RUN mkdir -p "$GOPATH/src" "$GOPATH/bin" && chmod -R 1777 "$GOPATH"
 # ship ppc64le/s390x binaries; wasm output is arch-agnostic so a single host
 # arch suffices for any consumer).
 #
-# TinyGo 0.37+ release binaries link against GCC 12+ libstdc++ which requires
-# GLIBCXX_3.4.30. AlmaLinux 9's default libstdc++ comes from GCC 11 and tops
-# out at GLIBCXX_3.4.29, so we install gcc-toolset-13-libstdc++-devel from
-# CRB and add its lib path to the dynamic linker config. Forward-compat ABI
-# means binaries needing older GLIBCXX still resolve correctly.
-# TODO: drop this gcc-toolset-13 install once go-build base moves to
-# AlmaLinux 10 (ships GCC 14 + GLIBCXX_3.4.32+ natively).
+# Pin tracks versions.yaml `tinygo.version`. See that file for the constraint
+# narrative around AlmaLinux 9's libstdc++ (GCC 11) and the 0.34.0 ceiling.
 RUN set -eux; \
     if [ "${TARGETARCH}" = "amd64" ] || [ "${TARGETARCH}" = "arm64" ]; then \
-        dnf --enablerepo=crb install -y gcc-toolset-13-libstdc++-devel; \
-        echo "/opt/rh/gcc-toolset-13/root/usr/lib64" > /etc/ld.so.conf.d/gcc-toolset-13.conf; \
-        ldconfig; \
         tinygo_version=$(yq -r .tinygo.version /etc/versions.yaml); \
         tinygo_sha256=$(yq -r ".tinygo.checksum.sha256.${TARGETARCH}" /etc/versions.yaml); \
         wget -q -O /tmp/tinygo.tar.gz \

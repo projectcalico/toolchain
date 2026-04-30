@@ -11,8 +11,15 @@ kubernetes:
 llvm:
   version: 20.1.8
 tinygo:
-  version: 0.41.1
+  # Pinned to 0.34.0 — last release that runs against AlmaLinux 9's default
+  # libstdc++ (GCC 11, max GLIBCXX_3.4.29). TinyGo 0.37+ release binaries
+  # require GLIBCXX_3.4.30+ (GCC 12+). RHEL 9 ABI-freezes libstdc++ at the
+  # 11.X series — no newer libstdc++.so.6 runtime is shipped via official
+  # rpms (gcc-toolset-N packages ship dev/static libs only, no .so.6
+  # runtime). Bump path: AlmaLinux 10 base (ships GCC 14) unblocks newer
+  # TinyGo natively.
+  version: 0.34.0
   checksum:
     sha256:
-      amd64: e156d1d93a376eef639a4143d13be07e8c463fb6cf2d7d447698ed4474d23e91
-      arm64: 789733bc3b5bace0bd1835a267b3ea267804a7ef1cfe69bc522c295f5226d624
+      amd64: 8acd27a39090e1e5c3ca341e81350f813ec6a02bf8090c4fc7c4b1afd4186341
+      arm64: a84b5134dc5144a494e3b7e78579536aca34c77951ddd0b19c300209d8b541e1
