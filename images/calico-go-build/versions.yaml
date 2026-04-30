@@ -10,3 +10,9 @@ kubernetes:
   version: 1.35.4
 llvm:
   version: 20.1.8
+tinygo:
+  version: 0.41.1
+  checksum:
+    sha256:
+      amd64: e156d1d93a376eef639a4143d13be07e8c463fb6cf2d7d447698ed4474d23e91
+      arm64: 789733bc3b5bace0bd1835a267b3ea267804a7ef1cfe69bc522c295f5226d624
