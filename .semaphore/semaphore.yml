@@ -71,6 +71,27 @@ blocks:
           matrix:
             - env_var: ARCH
               values: ["amd64", "arm64", "ppc64le", "s390x"]
+        - name: TinyGo wasm-smoke compile
+          commands:
+            - |
+              if [ "${ARCH}" = "amd64" ] || [ "${ARCH}" = "arm64" ]; then
+                docker run --rm \
+                  -v "$(pwd)/images/calico-go-build/test/wasm-smoke:/src" \
+                  -w /src \
+                  calico/go-build:${CALICO_GO_BUILD_IMAGETAG}-${ARCH} \
+                  sh -c 'go mod download && \
+                    tinygo build \
+                      -target=wasip1 \
+                      -gc=custom -opt=2 -scheduler=none \
+                      -tags="custommalloc nottinygc_envoy" \
+                      -o /tmp/smoke.wasm . && \
+                    file /tmp/smoke.wasm | grep -q "WebAssembly"'
+              else
+                echo "TinyGo not installed on ${ARCH}; skipping wasm-smoke"
+              fi
+          matrix:
+            - env_var: ARCH
+              values: ["amd64", "arm64", "ppc64le", "s390x"]
 
   - name: calico/rust-build image
     dependencies: []
