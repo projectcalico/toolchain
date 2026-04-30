@@ -178,6 +178,21 @@ ENV GOPATH=/go
 ENV PATH=$GOPATH/bin:$PATH
 RUN mkdir -p "$GOPATH/src" "$GOPATH/bin" && chmod -R 1777 "$GOPATH"
 
+# Install TinyGo for WebAssembly builds (amd64+arm64 only — upstream does not
+# ship ppc64le/s390x binaries; wasm output is arch-agnostic so a single host
+# arch suffices for any consumer).
+RUN set -eux; \
+    if [ "${TARGETARCH}" = "amd64" ] || [ "${TARGETARCH}" = "arm64" ]; then \
+        tinygo_version=$(yq -r .tinygo.version /etc/versions.yaml); \
+        tinygo_sha256=$(yq -r ".tinygo.checksum.sha256.${TARGETARCH}" /etc/versions.yaml); \
+        wget -q -O /tmp/tinygo.tar.gz \
+            "https://github.com/tinygo-org/tinygo/releases/download/v${tinygo_version}/tinygo${tinygo_version}.linux-${TARGETARCH}.tar.gz"; \
+        echo "${tinygo_sha256}  /tmp/tinygo.tar.gz" | sha256sum -c -; \
+        tar -C /usr/local -xzf /tmp/tinygo.tar.gz; \
+        rm /tmp/tinygo.tar.gz; \
+    fi
+ENV PATH=/usr/local/tinygo/bin:$PATH
+
 # su-exec is used by the entrypoint script to execute the user's command with the right UID/GID.
 RUN set -eux; \
     curl -sfL https://raw.githubusercontent.com/ncopa/su-exec/master/su-exec.c -o /tmp/su-exec.c; \
