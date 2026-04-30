@@ -279,6 +279,13 @@ COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
 # Copy semvalidator release tool.
 COPY bin/semvalidator-${TARGETARCH} /usr/local/bin/semvalidator
 
+# Install Argo CI helper scripts so this image can serve as the base for Argo
+# workflows, which have no pre-checkout step. Semaphore runners do their own
+# checkout and ignore these.
+COPY scripts/checkout.sh /usr/local/bin/checkout
+COPY scripts/setup-github-ssh.sh /usr/local/bin/setup-github-ssh
+COPY scripts/create-local-secret.sh /usr/local/bin/create-local-secret
+
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 
 # Squash into a single layer
