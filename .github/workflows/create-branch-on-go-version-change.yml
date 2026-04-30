@@ -1,16 +1,13 @@
 name: Create new Git branch on Go compiler version change
 
 on:
-  # create a new go1.x branch and a release tag when changes are merged to the master branch
-  pull_request:
-    types:
-      - closed
+  # create a new go1.x branch and a release tag when changes land on the master branch
+  push:
     branches:
       - master
 
 jobs:
   create-branch:
-    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     permissions:
       contents: write
