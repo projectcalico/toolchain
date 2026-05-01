@@ -4,6 +4,9 @@ ARG TARGETARCH
 
 ARG PROTOC_VERSION=34.1
 
+ENV CC=clang
+ENV CXX=clang++
+
 RUN dnf upgrade -y && dnf install -y epel-release && \
     dnf install -y yq
 
@@ -13,7 +16,6 @@ RUN dnf install -y \
     clang \
     cmake \
     cpio \
-    gcc \
     lld \
     make \
     wget
@@ -151,6 +153,8 @@ RUN set -eux; \
 
 FROM scratch
 
+ENV CC=clang
+ENV CXX=clang++
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV PATH=/usr/local/cargo/bin:$PATH
