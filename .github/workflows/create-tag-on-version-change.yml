@@ -1,16 +1,13 @@
 name: Create new Git tag on compiler version change
 
 on:
-  # create a new release tag when changes are merged to the go1.x release branches
-  pull_request:
-    types:
-      - closed
+  # create a new release tag when changes land on the go1.x release branches
+  push:
     branches:
       - go1.*
 
 jobs:
   create-tag:
-    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     permissions:
       contents: write
