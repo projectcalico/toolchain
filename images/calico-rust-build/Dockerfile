@@ -118,15 +118,6 @@ RUN set -eux; \
             fi; \
         done; \
         rustup target add aarch64-unknown-linux-gnu; \
-        \
-        # Bake linker / sysroot config so `cargo build --target aarch64-unknown-linux-gnu`
-        # works with no extra env vars.
-        mkdir -p "${CARGO_HOME}"; \
-        printf '%s\n' \
-            '[target.aarch64-unknown-linux-gnu]' \
-            'linker = "clang"' \
-            'rustflags = ["-C", "link-arg=--target=aarch64-linux-gnu", "-C", "link-arg=--sysroot=/usr/aarch64-linux-gnu/sys-root", "-C", "link-arg=-fuse-ld=lld"]' \
-            > "${CARGO_HOME}/config.toml"; \
     fi
 
 # Install Protocol Buffers compiler
