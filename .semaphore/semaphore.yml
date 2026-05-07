@@ -43,6 +43,11 @@ promotions:
     pipeline_file: promotions/calico-rust-build.yml
     auto_promote:
       when: "branch = 'master' AND change_in('/images/calico-rust-build/')"
+  # Publish tinygo images for master and files under images/calico-tinygo have changed.
+  - name: Publish calico/tinygo images
+    pipeline_file: promotions/calico-tinygo.yml
+    auto_promote:
+      when: "branch = 'master' AND change_in('/images/calico-tinygo/')"
 
 blocks:
   - name: calico/go-build image
@@ -109,3 +114,41 @@ blocks:
         - name: Build calico/binfmt amd64 image
           commands:
             - make -C images calico-binfmt-image ARCH=amd64
+
+  - name: calico/tinygo image
+    dependencies: []
+    task:
+      prologue:
+        commands:
+          - |
+            if [ "${SEMAPHORE_GIT_REF_TYPE}" = "tag" ]; then
+              export CALICO_TINYGO_IMAGETAG=${SEMAPHORE_GIT_TAG_NAME}
+            else
+              export CALICO_TINYGO_IMAGETAG=${SEMAPHORE_GIT_WORKING_BRANCH}
+            fi
+      jobs:
+        - name: Build calico/tinygo image
+          commands:
+            - make -C images calico-tinygo-image
+        - name: wasm-acid (real-consumer compile against freshly-built image)
+          commands:
+            # The wasm-acid fixture imports github.com/wasilibs/{go-re2,
+            # go-libinjection} — the prebuilt-wasm-static-archive consumers
+            # that the gateway/coraza-wasm WAF actually depends on. A trivial
+            # smoke (`package main; func main(){}`) does NOT exercise the
+            # wasm-side libc/libc++ ABI; this acid does. Catches a TinyGo or
+            # wasi-libc bump that breaks downstream WAF consumers at
+            # toolchain-image build time.
+            - make -C images calico-tinygo-image
+            - |
+              docker run --rm \
+                -v "$(pwd)/images/calico-tinygo/test/wasm-acid:/src" \
+                -w /src \
+                calico/tinygo:latest-amd64 \
+                sh -c 'go mod download && \
+                  tinygo build \
+                    -target=wasip1 \
+                    -gc=precise -opt=2 -scheduler=none \
+                    -tags="nottinygc_envoy memoize_builders" \
+                    -o /tmp/wasm-acid.wasm . && \
+                  file /tmp/wasm-acid.wasm | grep -q "WebAssembly"'
