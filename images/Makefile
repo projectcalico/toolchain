@@ -5,6 +5,7 @@ CALICO_BASE ?= base
 CALICO_BINFMT ?= binfmt
 CALICO_GO_BUILD ?= go-build
 CALICO_RUST_BUILD ?= rust-build
+CALICO_TINYGO ?= tinygo
 
 .PHONY: build
 build:
@@ -14,10 +15,10 @@ build:
 	cp ../cmd/bin/semvalidator-$(ARCH) calico-go-build/bin/semvalidator-$(ARCH)
 
 .PHONY: image
-image: calico-base-image calico-binfmt-image calico-go-build-image calico-rust-build-image
+image: calico-base-image calico-binfmt-image calico-go-build-image calico-rust-build-image calico-tinygo-image
 
 .PHONY: image-all
-image-all: calico-base-image-all calico-binfmt-image calico-go-build-image-all calico-rust-build-image-all
+image-all: calico-base-image-all calico-binfmt-image calico-go-build-image-all calico-rust-build-image-all calico-tinygo-image-all
 
 ################################################################################
 # Base image for all Calico components.
@@ -127,6 +128,25 @@ push-calico-rust-build-manifests: var-require-one-of-CONFIRM-DRYRUN var-require-
 	$(MAKE) BUILD_IMAGES=$(CALICO_RUST_BUILD) push-manifests IMAGETAG=$(BRANCH_NAME) EXCLUDEARCH="$(EXCLUDEARCH)"
 
 ################################################################################
+# Calico tinygo image with TinyGo + Go for WebAssembly builds (amd64 only —
+# wasm output is architecture-agnostic so a single host arch suffices).
+################################################################################
+
+CALICO_TINYGO_IMAGETAG ?= latest
+
+.PHONY: calico-tinygo-image
+calico-tinygo-image: register
+	$(DOCKER_BUILD) -t $(CALICO_TINYGO):latest-amd64 -f calico-tinygo/Dockerfile calico-tinygo/
+	$(MAKE) BUILD_IMAGES=$(CALICO_TINYGO) retag-build-images-with-registries VALIDARCHES=amd64 IMAGETAG=$(CALICO_TINYGO_IMAGETAG)
+
+.PHONY: calico-tinygo-image-all
+calico-tinygo-image-all: calico-tinygo-image
+
+.PHONY: calico-tinygo-cd
+calico-tinygo-cd: calico-tinygo-image var-require-one-of-CONFIRM-DRYRUN var-require-all-BRANCH_NAME
+	$(MAKE) BUILD_IMAGES=$(CALICO_TINYGO) retag-build-images-with-registries push-images-to-registries IMAGETAG=$(BRANCH_NAME) VALIDARCHES=amd64
+
+################################################################################
 # Clean up
 ################################################################################
 
@@ -137,3 +157,4 @@ clean:
 	-docker image rm -f $$(docker images $(CALICO_BINFMT) -a -q)
 	-docker image rm -f $$(docker images $(CALICO_GO_BUILD) -a -q)
 	-docker image rm -f $$(docker images $(CALICO_RUST_BUILD) -a -q)
+	-docker image rm -f $$(docker images $(CALICO_TINYGO) -a -q)
