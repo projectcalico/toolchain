@@ -1,0 +1,10 @@
+tinygo:
+  version: 0.41.1
+  checksum:
+    sha256:
+      amd64: e156d1d93a376eef639a4143d13be07e8c463fb6cf2d7d447698ed4474d23e91
+golang:
+  version: 1.26.2
+  checksum:
+    sha256:
+      amd64: 990e6b4bbba816dc3ee129eaeaf4b42f17c2800b88a2166c265ac1a200262282
