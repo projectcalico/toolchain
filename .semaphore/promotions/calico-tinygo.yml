@@ -1,0 +1,45 @@
+version: v1.0
+name: Publish calico/tinygo images
+agent:
+  machine:
+    type: f1-standard-2
+    os_image: ubuntu2204
+
+execution_time_limit:
+  minutes: 60
+
+global_job_config:
+  env_vars:
+    - name: DEV_REGISTRIES
+      value: calico
+  secrets:
+    - name: docker
+  prologue:
+    commands:
+      - echo $DOCKER_TOKEN | docker login --username "$DOCKER_USER" --password-stdin
+      - checkout
+      - export BRANCH_NAME=$(yq -r '.tinygo.version' images/calico-tinygo/versions.yaml)
+
+blocks:
+  - name: Publish calico/tinygo image
+    dependencies: []
+    run:
+      when: "branch = 'master' AND change_in('/images/calico-tinygo/')"
+    task:
+      jobs:
+        - name: Publish per-arch
+          commands:
+            - if [ -z "${SEMAPHORE_GIT_PR_NUMBER}" ]; then make -C images calico-tinygo-cd ARCH=$ARCH CONFIRM=true; fi
+          matrix:
+            - env_var: ARCH
+              values: ["amd64", "arm64"]
+  - name: Publish calico/tinygo multi-arch manifest
+    dependencies:
+      - Publish calico/tinygo image
+    run:
+      when: "branch = 'master' AND change_in('/images/calico-tinygo/')"
+    task:
+      jobs:
+        - name: Manifest
+          commands:
+            - if [ -z "${SEMAPHORE_GIT_PR_NUMBER}" ]; then make -C images push-calico-tinygo-manifests CONFIRM=true; fi
