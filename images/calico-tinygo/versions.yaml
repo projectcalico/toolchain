@@ -1,0 +1,17 @@
+tinygo:
+  version: 0.34.0
+  checksum:
+    sha256:
+      amd64: 8acd27a39090e1e5c3ca341e81350f813ec6a02bf8090c4fc7c4b1afd4186341
+# TinyGo 0.34 caps the host `go` invocation at 1.23.x. Pin Go directly to
+# 1.23.12 (latest compatible patch on the stable channel) instead of
+# bundling a newer Go and forcing GOTOOLCHAIN switching at build time —
+# the latter requires write access to GOPATH/pkg/sumdb which downstream
+# consumers (e.g. gateway/coraza-wasm) cannot reliably provide when the
+# tinygo container runs as the host user via `--user $(id -u):$(id -g)`.
+# When TinyGo relaxes its host-Go upper bound, bump in lockstep.
+golang:
+  version: 1.23.12
+  checksum:
+    sha256:
+      amd64: d3847fef834e9db11bf64e3fb34db9c04db14e068eeb064f49af747010454f90
