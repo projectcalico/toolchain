@@ -43,6 +43,11 @@ promotions:
     pipeline_file: promotions/calico-rust-build.yml
     auto_promote:
       when: "branch = 'master' AND change_in('/images/calico-rust-build/')"
+  # Publish tinygo images for master and files under images/calico-tinygo have changed.
+  - name: Publish calico/tinygo images
+    pipeline_file: promotions/calico-tinygo.yml
+    auto_promote:
+      when: "branch = 'master' AND change_in('/images/calico-tinygo/')"
 
 blocks:
   - name: calico/go-build image
@@ -109,3 +114,75 @@ blocks:
         - name: Build calico/binfmt amd64 image
           commands:
             - make -C images calico-binfmt-image ARCH=amd64
+
+  - name: calico/tinygo image
+    dependencies: []
+    task:
+      prologue:
+        commands:
+          - |
+            if [ "${SEMAPHORE_GIT_REF_TYPE}" = "tag" ]; then
+              export CALICO_TINYGO_IMAGETAG=${SEMAPHORE_GIT_TAG_NAME}
+            else
+              export CALICO_TINYGO_IMAGETAG=${SEMAPHORE_GIT_WORKING_BRANCH}
+            fi
+      jobs:
+        - name: Build and test calico/tinygo
+          commands:
+            - make -C images calico-tinygo-image ARCH=$ARCH
+            # Compile the test fixture against the just-built image, then
+            # inspect the produced wasm's import section for two failure
+            # classes a downstream consumer (gateway/coraza-wasm) would
+            # otherwise hit:
+            #
+            #   1. wasm-ld undefined symbols at link time. The fixture
+            #      imports github.com/wasilibs/{go-re2, go-libinjection}
+            #      and uses each via os.Args-derived input so TinyGo's
+            #      `-opt=2` optimizer cannot prove the calls dead. If a
+            #      TinyGo or wasi-libc bump breaks the prebuilt-archive
+            #      ABI, the build fails here.
+            #
+            #   2. Runtime `missing import: env.cre2_new` on Envoy. The
+            #      assertion below counts `<- env.cre2_*` imports in the
+            #      wasm; with the TinyGo-compatible go-re2 (currently
+            #      v1.6.0) cre2 resolves internally to the bundled
+            #      static archive and the count is zero. wasilibs/go-re2
+            #      v1.8.0+ removed TinyGo support (libre2 now needs
+            #      Abseil with thread sync, which TinyGo's libc++ shim
+            #      does not provide); a bump to such a version produces
+            #      external env.cre2_* imports and the assertion fails
+            #      here, at toolchain-image build time, not during a
+            #      downstream WAF rebuild.
+            #
+            # The Makefile builds the image as `tinygo:latest-amd64`
+            # locally before retagging it as `calico/tinygo:${branch}-amd64`
+            # for the registry. Use the local tag here — the calico/-
+            # prefixed tag uses the branch, not "latest".
+            - |
+              docker run --rm \
+                -v "$(pwd)/images/calico-tinygo/test/fixture:/src" \
+                -v /tmp:/out \
+                -w /src \
+                tinygo:latest-${ARCH} \
+                sh -c 'go mod download && \
+                  tinygo build \
+                    -target=wasip1 \
+                    -gc=precise -opt=2 -scheduler=none \
+                    -tags="nottinygc_envoy memoize_builders" \
+                    -o /out/fixture.wasm . && \
+                  file /out/fixture.wasm | grep -q "WebAssembly"'
+            - |
+              count=$(docker run --rm -v /tmp:/host ghcr.io/webassembly/wabt:1.0.36 \
+                wasm-objdump -x /host/fixture.wasm | grep -c "<- env.cre2_" || true)
+              if [ "${count:-0}" -ne 0 ]; then
+                echo >&2 "FAIL: fixture wasm has ${count} env.cre2_* imports (expected 0)"
+                echo >&2 "      A wasilibs/go-re2 bump likely lost TinyGo's bundled libcre2.a;"
+                echo >&2 "      this wasm would fail to load in Envoy with 'missing import: env.cre2_new'."
+                docker run --rm -v /tmp:/host ghcr.io/webassembly/wabt:1.0.36 \
+                  wasm-objdump -x /host/fixture.wasm | grep "<- env.cre2_" >&2 || true
+                exit 1
+              fi
+              echo "OK: fixture wasm resolves cre2_* internally (no env.cre2_* imports)"
+          matrix:
+            - env_var: ARCH
+              values: ["amd64", "arm64"]
