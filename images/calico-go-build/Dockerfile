@@ -47,6 +47,7 @@ RUN set -eux; \
         openssh-clients \
         patch \
         pcre-devel \
+        pigz \
         pkg-config \
         wget \
         xz \
