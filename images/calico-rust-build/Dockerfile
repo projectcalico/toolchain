@@ -4,14 +4,31 @@ ARG TARGETARCH
 
 ARG PROTOC_VERSION=34.1
 
+ENV CC=clang
+ENV CXX=clang++
+
 RUN dnf upgrade -y && dnf install -y epel-release && \
     dnf install -y yq
 
 RUN dnf install -y \
+    binutils-aarch64-linux-gnu \
     bsdtar \
-    gcc \
+    clang \
+    cmake \
+    cpio \
+    lld \
     make \
     wget
+
+# clang uses the verbatim target triple as the binutils prefix, so
+# `--target=aarch64-unknown-linux-gnu` looks for `aarch64-unknown-linux-gnu-ld`.
+# The EPEL package only ships the shorter `aarch64-linux-gnu-` prefix; bridge
+# the two with symlinks so clang picks the cross ld/as/ar instead of the host
+# /usr/bin/ld (which rejects aarch64 emulations).
+RUN set -eux; \
+    for tool in ld ld.bfd as ar nm objcopy objdump ranlib readelf strip; do \
+        ln -sfn "aarch64-linux-gnu-${tool}" "/usr/bin/aarch64-unknown-linux-gnu-${tool}"; \
+    done
 
 RUN dnf clean all
 
@@ -60,6 +77,49 @@ RUN set -eux; \
     cargo --version; \
     rustc --version
 
+# Install cross-compilation sysroot for arm64 (amd64 host only).
+# Mirrors images/calico-go-build/Dockerfile: target-arch RPMs are downloaded
+# from AlmaLinux mirrors and extracted under /usr/<triple>/sys-root, with
+# clang acting as the cross compiler via --target / --sysroot.
+RUN set -eux; \
+    if [ "${TARGETARCH}" = "amd64" ]; then \
+        arch=aarch64; \
+        triple=aarch64-linux-gnu; \
+        sysroot="/usr/${triple}/sys-root"; \
+        mkdir -p "${sysroot}"; \
+        tmpdir=$(mktemp -d); \
+        dnf download --destdir="${tmpdir}" \
+            --repofrompath="alma-${arch}-baseos,https://repo.almalinux.org/almalinux/9/BaseOS/${arch}/os/" \
+            --repofrompath="alma-${arch}-appstream,https://repo.almalinux.org/almalinux/9/AppStream/${arch}/os/" \
+            --repo="alma-${arch}-baseos" \
+            --repo="alma-${arch}-appstream" \
+            --setopt="alma-${arch}-baseos.gpgcheck=1" \
+            --setopt="alma-${arch}-baseos.gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-9" \
+            --setopt="alma-${arch}-appstream.gpgcheck=1" \
+            --setopt="alma-${arch}-appstream.gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-9" \
+            --forcearch="${arch}" \
+            gcc libgcc \
+            glibc glibc-devel \
+            kernel-headers; \
+        for rpm in "${tmpdir}"/*.rpm; do \
+            rpm2cpio "${rpm}" | cpio -idm -D "${sysroot}"; \
+        done; \
+        rm -rf "${tmpdir}"; \
+        # Replicate AlmaLinux's usrmerge layout (/lib64 -> usr/lib64) so absolute
+        # paths in glibc's linker scripts resolve correctly under --sysroot.
+        for dir in lib lib64; do \
+            if [ -d "${sysroot}/${dir}" ] && [ ! -L "${sysroot}/${dir}" ]; then \
+                mkdir -p "${sysroot}/usr/${dir}"; \
+                cp -a "${sysroot}/${dir}/." "${sysroot}/usr/${dir}/"; \
+                rm -rf "${sysroot}/${dir}"; \
+            fi; \
+            if [ ! -e "${sysroot}/${dir}" ]; then \
+                ln -s "usr/${dir}" "${sysroot}/${dir}"; \
+            fi; \
+        done; \
+        rustup target add aarch64-unknown-linux-gnu; \
+    fi
+
 # Install Protocol Buffers compiler
 RUN set -eux; \
     case "${TARGETARCH}" in \
@@ -84,6 +144,8 @@ RUN set -eux; \
 
 FROM scratch
 
+ENV CC=clang
+ENV CXX=clang++
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV PATH=/usr/local/cargo/bin:$PATH
