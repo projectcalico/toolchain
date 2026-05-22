@@ -11,7 +11,6 @@ RUN dnf upgrade -y && dnf install -y epel-release && \
     dnf install -y yq
 
 RUN dnf install -y \
-    binutils-aarch64-linux-gnu \
     bsdtar \
     clang \
     cmake \
@@ -19,16 +18,6 @@ RUN dnf install -y \
     lld \
     make \
     wget
-
-# clang uses the verbatim target triple as the binutils prefix, so
-# `--target=aarch64-unknown-linux-gnu` looks for `aarch64-unknown-linux-gnu-ld`.
-# The EPEL package only ships the shorter `aarch64-linux-gnu-` prefix; bridge
-# the two with symlinks so clang picks the cross ld/as/ar instead of the host
-# /usr/bin/ld (which rejects aarch64 emulations).
-RUN set -eux; \
-    for tool in ld ld.bfd as ar nm objcopy objdump ranlib readelf strip; do \
-        ln -sfn "aarch64-linux-gnu-${tool}" "/usr/bin/aarch64-unknown-linux-gnu-${tool}"; \
-    done
 
 RUN dnf clean all
 
@@ -83,6 +72,8 @@ RUN set -eux; \
 # clang acting as the cross compiler via --target / --sysroot.
 RUN set -eux; \
     if [ "${TARGETARCH}" = "amd64" ]; then \
+        dnf install -y binutils-aarch64-linux-gnu; \
+        dnf clean all; \
         arch=aarch64; \
         triple=aarch64-linux-gnu; \
         sysroot="/usr/${triple}/sys-root"; \
