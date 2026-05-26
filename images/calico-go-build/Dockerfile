@@ -75,6 +75,12 @@ RUN set -eux; \
             sysroot="/usr/${triple}/sys-root"; \
             mkdir -p "${sysroot}"; \
             tmpdir=$(mktemp -d); \
+            # Base packages for all architectures
+            packages="gcc libgcc glibc glibc-devel kernel-headers elfutils-libelf elfutils-libelf-devel libpcap libpcap-devel zlib zlib-devel"; \
+            # Add s390x-specific packages
+            if [ "${arch}" = "s390x" ]; then \
+                packages="${packages} glibc-headers"; \
+            fi; \
             dnf download --destdir="${tmpdir}" \
                 --repofrompath="alma-${arch}-baseos,https://repo.almalinux.org/almalinux/9/BaseOS/${arch}/os/" \
                 --repofrompath="alma-${arch}-appstream,https://repo.almalinux.org/almalinux/9/AppStream/${arch}/os/" \
@@ -89,12 +95,7 @@ RUN set -eux; \
                 --setopt="alma-${arch}-crb.gpgcheck=1" \
                 --setopt="alma-${arch}-crb.gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-9" \
                 --forcearch="${arch}" \
-                gcc libgcc \
-                glibc glibc-devel \
-                kernel-headers \
-                elfutils-libelf elfutils-libelf-devel \
-                libpcap libpcap-devel \
-                zlib zlib-devel; \
+                ${packages}; \
             for rpm in "${tmpdir}"/*.rpm; do \
                 rpm2cpio "${rpm}" | cpio -idm -D "${sysroot}"; \
             done; \
@@ -111,6 +112,18 @@ RUN set -eux; \
                     ln -s "usr/${dir}" "${sysroot}/${dir}"; \
                 fi; \
             done; \
+            # s390x's libgcc package ships libgcc_s.so as an absolute symlink to
+            # /lib64/libgcc_s.so.1, which ld.lld follows to the host fs (--sysroot
+            # is not applied to symlinks). Replace it with a linker script (what
+            # aarch64/ppc64le ship), since ld.lld does apply --sysroot to absolute
+            # paths inside linker scripts.
+            if [ "${arch}" = "s390x" ]; then \
+                for libgcc_s in "${sysroot}"/usr/lib/gcc/s390x-redhat-linux/*/libgcc_s.so; do \
+                    [ -L "${libgcc_s}" ] || continue; \
+                    rm "${libgcc_s}"; \
+                    printf 'OUTPUT_FORMAT(elf64-s390)\nGROUP ( /lib64/libgcc_s.so.1 libgcc.a )\n' > "${libgcc_s}"; \
+                done; \
+            fi; \
         done; \
     fi
 
