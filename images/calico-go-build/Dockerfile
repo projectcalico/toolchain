@@ -82,10 +82,13 @@ RUN set -eux; \
                 --repo="alma-${arch}-baseos" \
                 --repo="alma-${arch}-appstream" \
                 --repo="alma-${arch}-crb" \
+                --setopt="alma-${arch}-baseos.mirrorlist=https://mirrors.almalinux.org/mirrorlist/9/baseos" \
                 --setopt="alma-${arch}-baseos.gpgcheck=1" \
                 --setopt="alma-${arch}-baseos.gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-9" \
+                --setopt="alma-${arch}-appstream.mirrorlist=https://mirrors.almalinux.org/mirrorlist/9/appstream" \
                 --setopt="alma-${arch}-appstream.gpgcheck=1" \
                 --setopt="alma-${arch}-appstream.gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-9" \
+                --setopt="alma-${arch}-crb.mirrorlist=https://mirrors.almalinux.org/mirrorlist/9/crb" \
                 --setopt="alma-${arch}-crb.gpgcheck=1" \
                 --setopt="alma-${arch}-crb.gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-9" \
                 --forcearch="${arch}" \
