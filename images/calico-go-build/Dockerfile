@@ -75,26 +75,27 @@ RUN set -eux; \
             sysroot="/usr/${triple}/sys-root"; \
             mkdir -p "${sysroot}"; \
             tmpdir=$(mktemp -d); \
+            # CRB not enabled: AlmaLinux's Fastly CDN serves some POPs a 404
+            # for CRB's per-arch modules.yaml.gz, breaking "dnf download". The
+            # only CRB package we need (libpcap-devel) is fetched via curl.
             dnf download --destdir="${tmpdir}" \
                 --repofrompath="alma-${arch}-baseos,https://repo.almalinux.org/almalinux/9/BaseOS/${arch}/os/" \
                 --repofrompath="alma-${arch}-appstream,https://repo.almalinux.org/almalinux/9/AppStream/${arch}/os/" \
-                --repofrompath="alma-${arch}-crb,https://repo.almalinux.org/almalinux/9/CRB/${arch}/os/" \
                 --repo="alma-${arch}-baseos" \
                 --repo="alma-${arch}-appstream" \
-                --repo="alma-${arch}-crb" \
                 --setopt="alma-${arch}-baseos.gpgcheck=1" \
                 --setopt="alma-${arch}-baseos.gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-9" \
                 --setopt="alma-${arch}-appstream.gpgcheck=1" \
                 --setopt="alma-${arch}-appstream.gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-9" \
-                --setopt="alma-${arch}-crb.gpgcheck=1" \
-                --setopt="alma-${arch}-crb.gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-9" \
                 --forcearch="${arch}" \
                 gcc libgcc \
                 glibc glibc-devel \
                 kernel-headers \
                 elfutils-libelf elfutils-libelf-devel \
-                libpcap libpcap-devel \
+                libpcap \
                 zlib zlib-devel; \
+            curl -sfL -o "${tmpdir}/libpcap-devel.rpm" \
+                "https://repo.almalinux.org/almalinux/9/CRB/${arch}/os/Packages/libpcap-devel-1.10.0-4.el9.${arch}.rpm"; \
             for rpm in "${tmpdir}"/*.rpm; do \
                 rpm2cpio "${rpm}" | cpio -idm -D "${sysroot}"; \
             done; \
