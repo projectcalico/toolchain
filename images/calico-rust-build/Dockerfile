@@ -2,7 +2,7 @@ FROM almalinux:9 AS builder
 
 ARG TARGETARCH
 
-ARG PROTOC_VERSION=34.1
+ARG PROTOC_VERSION=35.1
 
 ENV CC=clang
 ENV CXX=clang++
