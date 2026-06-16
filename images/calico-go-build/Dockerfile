@@ -4,11 +4,11 @@ FROM almalinux:9 AS builder
 
 ARG TARGETARCH
 
-ARG CONTAINERREGISTRY_VERSION=v0.21.2
+ARG CONTAINERREGISTRY_VERSION=v0.21.6
 ARG CONTROLLER_TOOLS_VERSION=v0.18.0
-ARG GINKGO_VERSION=v2.28.1
-ARG GO_LINT_VERSION=v2.11.3
-ARG MOCKERY_VERSION=3.6.4
+ARG GINKGO_VERSION=v2.31.0
+ARG GO_LINT_VERSION=v2.12.2
+ARG MOCKERY_VERSION=3.7.1
 ARG PROTOC_VERSION=35.1
 
 ENV PATH=/usr/local/go/bin:$PATH
@@ -240,7 +240,7 @@ RUN set -eux; \
         curl -sfL https://github.com/google/go-containerregistry/releases/download/${CONTAINERREGISTRY_VERSION}/go-containerregistry_Linux_x86_64.tar.gz | tar xz -C /usr/local/bin crane; \
     fi
 
-RUN curl -sfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b /usr/local/bin $GO_LINT_VERSION
+RUN curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b /usr/local/bin ${GO_LINT_VERSION}
 
 # Install necessary Kubernetes binaries used in tests.
 RUN set -eux; \
@@ -266,8 +266,8 @@ RUN set -eux; \
     go install github.com/jstemmer/go-junit-report@v1.0.0 && \
     go install github.com/onsi/ginkgo/v2/ginkgo@${GINKGO_VERSION} && \
     go install github.com/wadey/gocovmerge@v0.0.0-20160331181800-b5bfa59ec0ad && \
-    go install golang.org/x/tools/cmd/goimports@v0.43.0 && \
-    go install golang.org/x/tools/cmd/stringer@v0.43.0 && \
+    go install golang.org/x/tools/cmd/goimports@v0.46.0 && \
+    go install golang.org/x/tools/cmd/stringer@v0.46.0 && \
     go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2 && \
     go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11 && \
     go install gotest.tools/gotestsum@v1.13.0 && \
@@ -278,8 +278,8 @@ RUN set -eux; \
     go install k8s.io/code-generator/cmd/defaulter-gen@v${k8s_libs_version} && \
     go install k8s.io/code-generator/cmd/informer-gen@v${k8s_libs_version} && \
     go install k8s.io/code-generator/cmd/lister-gen@v${k8s_libs_version} && \
-    go install k8s.io/kube-openapi/cmd/openapi-gen@v0.0.0-20260127142750-a19766b6e2d4 && \
-    go install mvdan.cc/gofumpt@v0.9.2
+    go install k8s.io/kube-openapi/cmd/openapi-gen@v0.0.0-20260603220949-865597e52e25 && \
+    go install mvdan.cc/gofumpt@v0.10.0
 
 # Cleanup module cache after we have built and installed all Go utilities
 RUN go clean -modcache && go clean -cache
