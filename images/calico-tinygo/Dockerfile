@@ -55,6 +55,19 @@ ENV PATH=/usr/local/go/bin:/usr/local/tinygo/bin:$PATH
 
 RUN mkdir -p "$GOPATH/src" "$GOPATH/bin" && chmod -R 1777 "$GOPATH"
 
+# ctype/wctype compat archive. TinyGo 0.38 rewrote how it builds its bundled
+# wasi-libc (builder/wasilibc.go) and dropped the musl ctype/*.c sources, so
+# toupper/tolower and the is*/isw*_l ctype family are no longer emitted into
+# libc.a. Prebuilt wasm archives that reference those as externs -- notably
+# wasilibs/go-re2 v1.6.0 (libc++.a) and wasilibs/nottinygc v0.7.1
+# (libmimalloc.a), the frozen archives WAF consumers must keep using -- then
+# fail to link with "wasm-ld: undefined symbol: toupper". Ship the objects
+# here (lifted verbatim from TinyGo 0.34's wasi-libc, identical pinned
+# wasi-libc commit) so downstream builds can append them to the wasm link via
+# `-ldflags=-extldflags=$CALICO_TINYGO_CTYPE_COMPAT`. See ctypecompat/README.md.
+COPY ctypecompat/libctypecompat.a /usr/local/lib/ctypecompat/libctypecompat.a
+ENV CALICO_TINYGO_CTYPE_COMPAT=/usr/local/lib/ctypecompat/libctypecompat.a
+
 # Recorded for build-log auditability.
 RUN go version && tinygo version
 
@@ -62,6 +75,10 @@ FROM scratch
 
 ENV GOPATH=/go
 ENV PATH=/usr/local/go/bin:/usr/local/tinygo/bin:/go/bin:$PATH
+# Path to the ctype/wctype compat archive baked into the builder stage above;
+# re-declared here because ENV does not survive across build stages. Downstream
+# WAF builds link it via `-ldflags=-extldflags=$CALICO_TINYGO_CTYPE_COMPAT`.
+ENV CALICO_TINYGO_CTYPE_COMPAT=/usr/local/lib/ctypecompat/libctypecompat.a
 
 COPY --from=builder / /
 
