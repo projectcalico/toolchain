@@ -133,10 +133,15 @@ push-calico-rust-build-manifests: var-require-one-of-CONFIRM-DRYRUN var-require-
 ################################################################################
 
 CALICO_TINYGO_IMAGETAG ?= latest
+# TinyGo version, read from the image's versions.yaml. Passed as a build-arg so
+# the Dockerfile can pull the matching upstream tinygo image as the source of a
+# compatible libstdc++ runtime (see calico-tinygo/Dockerfile). Deferred like
+# QEMU_VERSION above so yq runs only when a tinygo target needs it.
+CALICO_TINYGO_VERSION ?= $(shell yq -r .tinygo.version calico-tinygo/versions.yaml)
 
 .PHONY: calico-tinygo-image
 calico-tinygo-image: register
-	$(DOCKER_BUILD) -t $(CALICO_TINYGO):latest-$(ARCH) -f calico-tinygo/Dockerfile calico-tinygo/
+	$(DOCKER_BUILD) --build-arg TINYGO_VERSION=$(CALICO_TINYGO_VERSION) -t $(CALICO_TINYGO):latest-$(ARCH) -f calico-tinygo/Dockerfile calico-tinygo/
 	$(MAKE) BUILD_IMAGES=$(CALICO_TINYGO) retag-build-images-with-registries VALIDARCHES=$(ARCH) IMAGETAG=$(CALICO_TINYGO_IMAGETAG)
 
 .PHONY: calico-tinygo-image-all
