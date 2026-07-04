@@ -169,6 +169,7 @@ blocks:
                     -target=wasip1 \
                     -gc=precise -opt=2 -scheduler=none \
                     -tags="nottinygc_envoy memoize_builders" \
+                    -ldflags="-extldflags=$CALICO_TINYGO_CTYPE_COMPAT" \
                     -o /out/fixture.wasm . && \
                   file /out/fixture.wasm | grep -q "WebAssembly"'
             - |
