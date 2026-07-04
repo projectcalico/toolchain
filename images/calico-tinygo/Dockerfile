@@ -1,3 +1,34 @@
+# ctypecompat build stage: supply the musl ctype/wctype functions (toupper,
+# tolower, the is*/isw* family and their _l locale variants) that TinyGo >= 0.38
+# stopped compiling into its bundled wasi-libc. The WAF wasm this image builds
+# links go-re2 v1.6.0's prebuilt static archives, which reference those as
+# externs; without them the link fails with "wasm-ld: undefined symbol: toupper".
+# go-re2 is frozen at v1.6.0 -- v1.8.0+ deleted the TinyGo static archives and
+# moved cre2 to a wazero runtime that Envoy's V8 cannot host, so we cannot bump
+# our way out of the missing symbols.
+#
+# The objects are lifted verbatim from TinyGo 0.34's prebuilt wasi-libc: its
+# pinned wasi-libc commit matches newer TinyGo (0.38 only dropped the ctype glob
+# from its libc build, the sources are unchanged), so they are ABI-compatible.
+# The source image is digest-pinned and `ar rcsD` writes deterministic archives,
+# so this extraction is reproducible. Built here rather than committed to the repo.
+#
+# TINYGO_VERSION is declared before any FROM so it is in scope for the final
+# stage's FROM below; the Makefile passes it from versions.yaml.
+ARG TINYGO_VERSION
+FROM calico/tinygo@sha256:9ff0bed2e3598f695a2fc6222be901eb0f3a0153549b82d28aa640c8487e1854 AS ctypecompat
+RUN set -eux; \
+    libc=/usr/local/tinygo/lib/wasi-libc/sysroot/lib/wasm32-wasi/libc.a; \
+    objs="__ctype_b_loc.o __ctype_get_mb_cur_max.o __ctype_tolower_loc.o __ctype_toupper_loc.o \
+          isalnum.o isalpha.o isascii.o isblank.o iscntrl.o isdigit.o isgraph.o islower.o \
+          isprint.o ispunct.o isspace.o isupper.o isxdigit.o \
+          iswalnum.o iswalpha.o iswblank.o iswcntrl.o iswctype.o iswdigit.o iswgraph.o \
+          iswlower.o iswprint.o iswpunct.o iswspace.o iswupper.o iswxdigit.o \
+          toascii.o tolower.o toupper.o towctrans.o wcswidth.o wctrans.o"; \
+    mkdir -p /work && cd /work; \
+    ar x "$libc" $objs; \
+    ar rcsD /libctypecompat.a $objs
+
 # calico/tinygo builds the coraza WAF wasm (TinyGo wasip1 target).
 #
 # Based on the upstream tinygo/tinygo image rather than a bare distro base:
@@ -37,17 +68,11 @@ RUN apt-get update && \
         wget && \
     rm -rf /var/lib/apt/lists/*
 
-# ctype/wctype compat archive. TinyGo 0.38 rewrote how it builds its bundled
-# wasi-libc (builder/wasilibc.go) and dropped the musl ctype/*.c sources, so
-# toupper/tolower and the is*/isw*_l ctype family are no longer emitted into
-# libc.a. Prebuilt wasm archives that reference those as externs -- notably
-# wasilibs/go-re2 v1.6.0 (libc++.a) and wasilibs/nottinygc v0.7.1
-# (libmimalloc.a), the frozen archives WAF consumers must keep using -- then
-# fail to link with "wasm-ld: undefined symbol: toupper". Ship the objects
-# here (lifted verbatim from TinyGo 0.34's wasi-libc, identical pinned
-# wasi-libc commit) so downstream builds can append them to the wasm link via
-# `-ldflags=-extldflags=$CALICO_TINYGO_CTYPE_COMPAT`. See ctypecompat/README.md.
-COPY ctypecompat/libctypecompat.a /usr/local/lib/ctypecompat/libctypecompat.a
+# ctype/wctype compat archive, built in the stage above. Downstream WAF builds
+# append it to their TinyGo wasm link via
+# `-ldflags=-extldflags=$CALICO_TINYGO_CTYPE_COMPAT`; the test fixture under
+# test/fixture does the same in CI as a regression guard.
+COPY --from=ctypecompat /libctypecompat.a /usr/local/lib/ctypecompat/libctypecompat.a
 ENV CALICO_TINYGO_CTYPE_COMPAT=/usr/local/lib/ctypecompat/libctypecompat.a
 
 # GOPATH world-writable so downstream builds running as any uid (via
