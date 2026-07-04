@@ -1,5 +1,11 @@
 ARG TARGETARCH=${TARGETARCH}
 
+# Upstream TinyGo image, used only as the source of a libstdc++ runtime that
+# matches the TinyGo binary this image ships (see the COPY below). TINYGO_VERSION
+# is passed by the Makefile from versions.yaml so it stays in lockstep.
+ARG TINYGO_VERSION
+FROM tinygo/tinygo:${TINYGO_VERSION} AS tinygobin
+
 FROM almalinux:9 AS builder
 
 ARG TARGETARCH
@@ -26,6 +32,24 @@ RUN dnf install -y \
 
 COPY versions.yaml /etc/versions.yaml
 
+# TinyGo >= 0.38's release binary is dynamically linked against a newer
+# libstdc++ than AlmaLinux 9 ships (arm64 needs GLIBCXX_3.4.30; the EL9 base
+# tops out at 3.4.29 and gcc-toolset does NOT ship a drop-in runtime .so), so
+# `tinygo version` fails at image-build time with
+# "libstdc++.so.6: version `GLIBCXX_3.4.30' not found". Lift the exact
+# libstdc++ runtime from the upstream TinyGo image (the lib TinyGo is built
+# against and known to run with) for this build's arch, place it on the loader
+# path, and register with ldconfig. libstdc++ depends only on libgcc_s + libc,
+# both present in the AlmaLinux 9 base, so the cross-distro copy is safe. The
+# TinyGo image tag is derived from versions.yaml so it stays in lockstep.
+COPY --from=tinygobin /usr/lib/*-linux-gnu/libstdc++.so.6.0.* /usr/local/lib64/
+RUN so="$(find /usr/local/lib64 -name 'libstdc++.so.6.0.*' -print -quit)"; \
+    test -n "$so" || { echo >&2 "error: libstdc++ runtime not copied from tinygo image"; exit 1; }; \
+    strings "$so" | grep -q GLIBCXX_3.4.30 || { echo >&2 "error: $so lacks GLIBCXX_3.4.30"; exit 1; }; \
+    ln -sf "$(basename "$so")" /usr/local/lib64/libstdc++.so.6; \
+    echo "/usr/local/lib64" > /etc/ld.so.conf.d/tinygo-libstdcxx.conf; \
+    ldconfig
+
 # TinyGo internally invokes the host `go` toolchain to compile Go packages
 # (parse, type-check, run mod resolution) before lowering through LLVM IR
 # to wasm; the bundled `go` is therefore not optional. Pin both versions
@@ -38,9 +62,10 @@ RUN set -eux; \
     tar -C /usr/local -xzf /tmp/go.tar.gz; \
     rm /tmp/go.tar.gz
 
-# TinyGo upstream tarball is statically linked (file: ELF static; ldd: not a
-# dynamic executable) so the AlmaLinux 9 base does not need to provide
-# matching libstdc++ / glibc — just untar to /usr/local.
+# TinyGo's upstream tarball is untarred straight to /usr/local. The binary is
+# dynamically linked against libstdc++ (arm64 needs GLIBCXX_3.4.30, supplied by
+# the libstdc++ copied from the upstream tinygo image + ldconfig'd above); glibc
+# from the AlmaLinux 9 base is sufficient.
 RUN set -eux; \
     tinygo_version=$(yq -r .tinygo.version /etc/versions.yaml); \
     tinygo_sha256=$(yq -r ".tinygo.checksum.sha256.${TARGETARCH}" /etc/versions.yaml); \
