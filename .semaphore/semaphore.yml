@@ -129,6 +129,10 @@ blocks:
       jobs:
         - name: Build and test calico/tinygo
           commands:
+            # Verify the committed ctypecompat archive matches its recorded
+            # sha256 before it is baked into the image. Cheap, needs no docker
+            # or llvm-ar, and fails fast if the blob drifts from its provenance.
+            - images/calico-tinygo/ctypecompat/regen.sh --check
             - make -C images calico-tinygo-image ARCH=$ARCH
             # Compile the test fixture against the just-built image, then
             # inspect the produced wasm's import section for two failure
@@ -169,17 +173,25 @@ blocks:
                     -target=wasip1 \
                     -gc=precise -opt=2 -scheduler=none \
                     -tags="nottinygc_envoy memoize_builders" \
+                    -ldflags="-extldflags=$CALICO_TINYGO_CTYPE_COMPAT" \
                     -o /out/fixture.wasm . && \
                   file /out/fixture.wasm | grep -q "WebAssembly"'
             - |
-              count=$(docker run --rm -v /tmp:/host ghcr.io/webassembly/wabt:1.0.36 \
-                wasm-objdump -x /host/fixture.wasm | grep -c "<- env.cre2_" || true)
+              # Dump imports first so a missing/corrupt wasm (wasm-objdump
+              # failure) fails the step, instead of grep defaulting count to a
+              # green 0. Only the grep count is allowed to be 0. Check the dump
+              # exit explicitly rather than relying on the shell's set -e.
+              if ! dump=$(docker run --rm -v /tmp:/host ghcr.io/webassembly/wabt:1.0.36 \
+                wasm-objdump -x /host/fixture.wasm); then
+                echo >&2 "FAIL: could not disassemble /tmp/fixture.wasm (missing or corrupt wasm)"
+                exit 1
+              fi
+              count=$(printf '%s\n' "$dump" | grep -c "<- env.cre2_" || true)
               if [ "${count:-0}" -ne 0 ]; then
                 echo >&2 "FAIL: fixture wasm has ${count} env.cre2_* imports (expected 0)"
                 echo >&2 "      A wasilibs/go-re2 bump likely lost TinyGo's bundled libcre2.a;"
                 echo >&2 "      this wasm would fail to load in Envoy with 'missing import: env.cre2_new'."
-                docker run --rm -v /tmp:/host ghcr.io/webassembly/wabt:1.0.36 \
-                  wasm-objdump -x /host/fixture.wasm | grep "<- env.cre2_" >&2 || true
+                printf '%s\n' "$dump" | grep "<- env.cre2_" >&2 || true
                 exit 1
               fi
               echo "OK: fixture wasm resolves cre2_* internally (no env.cre2_* imports)"
