@@ -129,6 +129,10 @@ blocks:
       jobs:
         - name: Build and test calico/tinygo
           commands:
+            # Verify the committed ctypecompat archive matches its recorded
+            # sha256 before it is baked into the image. Cheap, needs no docker
+            # or llvm-ar, and fails fast if the blob drifts from its provenance.
+            - images/calico-tinygo/ctypecompat/regen.sh --check
             - make -C images calico-tinygo-image ARCH=$ARCH
             # Compile the test fixture against the just-built image, then
             # inspect the produced wasm's import section for two failure

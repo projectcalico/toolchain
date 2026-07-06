@@ -67,12 +67,29 @@ WAF build uses). Both archives reference the same ctype/wctype family, so the
 go-re2 path exercises the symbols the shim supplies; the nottinygc path is not
 directly covered by CI.
 
+## Integrity
+
+`libctypecompat.a` is the only committed binary in this repo, so its provenance
+is pinned rather than trusted blindly:
+
+- Source image digest at time of generation:
+  `calico/tinygo@sha256:9ff0bed2e3598f695a2fc6222be901eb0f3a0153549b82d28aa640c8487e1854`
+- Committed archive sha256:
+  `163ca777f4788097febe70862ee204e0464492781e5c67bfba83dc1e376cf39b`
+
+`llvm-ar` writes archives in deterministic mode (zeroed timestamps/uids/gids),
+so regenerating from the same source image reproduces these exact bytes.
+`./regen.sh --check` verifies the committed archive against the recorded hash
+(no docker/llvm-ar needed); CI runs it as a guard against the blob drifting from
+its documented provenance.
+
 ## Regenerating
 
 Run `./regen.sh` (needs `docker` + host `llvm-ar`). It pulls the source TinyGo
-image, extracts its `libc.a`, and re-archives the ctype object members. See the
-script for the exact object list. Source image digest at time of generation:
-`calico/tinygo@sha256:9ff0bed2e3598f695a2fc6222be901eb0f3a0153549b82d28aa640c8487e1854`.
+image, extracts its `libc.a`, re-archives the ctype object members, and verifies
+the result against the recorded sha256. See the script for the exact object
+list. If you intentionally regenerate against a different source, update
+`EXPECTED_SHA256` in `regen.sh` (and this README) in the same commit.
 
 ## When this can go away
 
