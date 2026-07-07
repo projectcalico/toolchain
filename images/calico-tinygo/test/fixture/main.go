@@ -24,16 +24,10 @@
 //     missing-import-at-instantiate failure mode `gateway/coraza-wasm`
 //     would have hit during a downstream WAF rebuild.)
 //
-// Both assertions concern go-re2/cre2 only; every ctype symbol the shim
-// resolves comes from go-re2's archives. go-libinjection is imported to prove
-// it also compiles and links under the shipped TinyGo, but it contributes
-// nothing to the cre2 assertions above.
-//
-// pattern + input are read from os.Args to keep the inputs non-constant, but
-// the wasilibs calls are not dead-code-eliminated regardless: they cross the
-// wasm-import boundary and have observable effects (re2.MustCompile panics on
-// a bad pattern), so `-opt=2` cannot prove them dead even with constant inputs.
-// The static archive is pulled in and the ctype shim is exercised either way.
+// go-libinjection is a compile/link check only; the CI assertions above cover
+// go-re2/cre2. pattern + input come from os.Args just to keep them non-constant
+// -- `-opt=2` can't dead-code-eliminate the wasilibs calls regardless, since
+// they cross the wasm-import boundary and have observable effects.
 package main
 
 import (
