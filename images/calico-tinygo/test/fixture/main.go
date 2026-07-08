@@ -2,13 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // fixture is a TinyGo-vs-go-re2-v1.6 compat check. wasilibs/go-re2 v1.8.0
-// removed TinyGo support upstream (see wasilibs/go-re2#161 — libre2 now
-// requires Abseil with thread synchronization, which TinyGo's libc++ shim
-// does not provide), so coraza-proxy-wasm and gateway/coraza-wasm are
-// permanently frozen on go-re2 v1.6.0. The TinyGo version we ship in this
-// image must continue to link cleanly against v1.6.0's prebuilt wasm
-// static archives (`internal/wasm/{libcre2,libc++,libmimalloc}.a`) for
-// downstream WAF builds to keep working.
+// removed TinyGo support upstream (see wasilibs/go-re2#161): it deleted the
+// prebuilt TinyGo wasm static archives and moved cre2 to a wazero runtime that
+// Envoy's V8 cannot host, so coraza-proxy-wasm and gateway/coraza-wasm are
+// permanently frozen on go-re2 v1.6.0. The TinyGo version we ship in this image
+// must continue to link cleanly against v1.6.0's prebuilt wasm static archives
+// (`internal/wasm/{libcre2,libc++}.a`) for downstream WAF builds to keep working.
 //
 // CI assertion (in .semaphore/semaphore.yml): build this fixture against
 // the just-built calico/tinygo image and count `<- env.cre2_*` imports
@@ -25,11 +24,10 @@
 //     missing-import-at-instantiate failure mode `gateway/coraza-wasm`
 //     would have hit during a downstream WAF rebuild.)
 //
-// pattern + input are read from os.Args so TinyGo's `-opt=2` optimizer
-// cannot prove the calls dead and constant-fold them — without this the
-// optimizer eliminates the wasilibs calls entirely, the static archive
-// never gets pulled in, and the assertion silently passes on a wasm that
-// exercises nothing.
+// go-libinjection is a compile/link check only; the CI assertions above cover
+// go-re2/cre2. pattern + input come from os.Args just to keep them non-constant
+// -- `-opt=2` can't dead-code-eliminate the wasilibs calls regardless, since
+// they cross the wasm-import boundary and have observable effects.
 package main
 
 import (
