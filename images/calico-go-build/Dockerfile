@@ -270,6 +270,7 @@ RUN set -eux; \
     go install golang.org/x/tools/cmd/stringer@v0.46.0 && \
     go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2 && \
     go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11 && \
+    go install go.opentelemetry.io/collector/cmd/builder@v0.153.0 && \
     go install gotest.tools/gotestsum@v1.13.0 && \
     go install k8s.io/code-generator/cmd/applyconfiguration-gen@v${k8s_libs_version} && \
     go install k8s.io/code-generator/cmd/client-gen@v${k8s_libs_version} && \
