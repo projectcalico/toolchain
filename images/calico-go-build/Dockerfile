@@ -9,6 +9,7 @@ ARG CONTROLLER_TOOLS_VERSION=v0.18.0
 ARG GINKGO_VERSION=v2.28.1
 ARG GO_LINT_VERSION=v2.11.3
 ARG MOCKERY_VERSION=3.6.4
+ARG OCB_VERSION=0.153.0
 ARG PROTOC_VERSION=33.5
 
 ENV PATH=/usr/local/go/bin:$PATH
@@ -265,7 +266,7 @@ RUN set -eux; \
     go install github.com/jstemmer/go-junit-report@v1.0.0 && \
     go install github.com/onsi/ginkgo/v2/ginkgo@${GINKGO_VERSION} && \
     go install github.com/wadey/gocovmerge@v0.0.0-20160331181800-b5bfa59ec0ad && \
-    go install go.opentelemetry.io/collector/cmd/builder@v0.153.0 && \
+    curl -sfL https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/cmd%2Fbuilder%2Fv${OCB_VERSION}/ocb_${OCB_VERSION}_linux_${TARGETARCH} -o /usr/local/bin/ocb && chmod +x /usr/local/bin/ocb && \
     go install golang.org/x/tools/cmd/goimports@v0.43.0 && \
     go install golang.org/x/tools/cmd/stringer@v0.43.0 && \
     go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.1 && \
