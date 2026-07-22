@@ -9,6 +9,7 @@ ARG CONTROLLER_TOOLS_VERSION=v0.18.0
 ARG GINKGO_VERSION=v2.31.0
 ARG GO_LINT_VERSION=v2.12.2
 ARG MOCKERY_VERSION=3.7.1
+ARG OCB_VERSION=0.157.0
 ARG PROTOC_VERSION=35.1
 
 ENV PATH=/usr/local/go/bin:$PATH
@@ -249,6 +250,13 @@ RUN set -eux; \
     curl -sfL https://dl.k8s.io/release/v${k8s_version}/bin/linux/${TARGETARCH}/kubectl -o /usr/local/bin/kubectl && chmod +x /usr/local/bin/kubectl && \
     curl -sfL https://dl.k8s.io/v${k8s_version}/bin/linux/${TARGETARCH}/kube-controller-manager -o /usr/local/bin/kube-controller-manager && chmod +x /usr/local/bin/kube-controller-manager
 
+# Install OpenTelemetry Collector Builder for otel-collector.
+# Prebuilt binaries are only available for amd64 and arm64.
+RUN set -eux; \
+    if [ "${TARGETARCH}" = "amd64" ] || [ "${TARGETARCH}" = "arm64" ]; then \
+        curl -sfL https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/cmd%2Fbuilder%2Fv${OCB_VERSION}/ocb_${OCB_VERSION}_linux_${TARGETARCH} -o /usr/local/bin/ocb && chmod +x /usr/local/bin/ocb; \
+    fi
+
 RUN set -eux; \
     case "${TARGETARCH}" in \
     'amd64') \
@@ -266,7 +274,6 @@ RUN set -eux; \
     go install github.com/jstemmer/go-junit-report@v1.0.0 && \
     go install github.com/onsi/ginkgo/v2/ginkgo@${GINKGO_VERSION} && \
     go install github.com/wadey/gocovmerge@v0.0.0-20160331181800-b5bfa59ec0ad && \
-    go install go.opentelemetry.io/collector/cmd/builder@v0.153.0 && \
     go install golang.org/x/tools/cmd/goimports@v0.46.0 && \
     go install golang.org/x/tools/cmd/stringer@v0.46.0 && \
     go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2 && \
