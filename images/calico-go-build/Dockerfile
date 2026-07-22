@@ -266,7 +266,7 @@ RUN set -eux; \
     go install github.com/jstemmer/go-junit-report@v1.0.0 && \
     go install github.com/onsi/ginkgo/v2/ginkgo@${GINKGO_VERSION} && \
     go install github.com/wadey/gocovmerge@v0.0.0-20160331181800-b5bfa59ec0ad && \
-    go install go.opentelemetry.io/collector/cmd/builder@v0.153.0 && \
+    go install go.opentelemetry.io/collector/cmd/builder@v0.153.0 && mv /go/bin/builder /go/bin/ocb && \
     go install golang.org/x/tools/cmd/goimports@v0.46.0 && \
     go install golang.org/x/tools/cmd/stringer@v0.46.0 && \
     go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2 && \
