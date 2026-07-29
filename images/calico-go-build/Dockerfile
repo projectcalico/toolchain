@@ -9,6 +9,7 @@ ARG CONTROLLER_TOOLS_VERSION=v0.18.0
 ARG GINKGO_VERSION=v2.31.0
 ARG GO_LINT_VERSION=v2.12.2
 ARG MOCKERY_VERSION=3.7.1
+ARG OCB_VERSION=0.157.0
 ARG PROTOC_VERSION=35.1
 
 ENV PATH=/usr/local/go/bin:$PATH
@@ -248,6 +249,12 @@ RUN set -eux; \
     curl -sfL https://dl.k8s.io/v${k8s_version}/bin/linux/${TARGETARCH}/kube-apiserver -o /usr/local/bin/kube-apiserver && chmod +x /usr/local/bin/kube-apiserver && \
     curl -sfL https://dl.k8s.io/release/v${k8s_version}/bin/linux/${TARGETARCH}/kubectl -o /usr/local/bin/kubectl && chmod +x /usr/local/bin/kubectl && \
     curl -sfL https://dl.k8s.io/v${k8s_version}/bin/linux/${TARGETARCH}/kube-controller-manager -o /usr/local/bin/kube-controller-manager && chmod +x /usr/local/bin/kube-controller-manager
+
+# Install OpenTelemetry Collector Builder for otel-collector.
+RUN set -eux; \
+    if [ "${TARGETARCH}" = "amd64" ] || [ "${TARGETARCH}" = "arm64" ]; then \
+        curl -sfL https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/cmd%2Fbuilder%2Fv${OCB_VERSION}/ocb_${OCB_VERSION}_linux_${TARGETARCH} -o /usr/local/bin/ocb && chmod +x /usr/local/bin/ocb; \
+    fi
 
 RUN set -eux; \
     case "${TARGETARCH}" in \
