@@ -1,0 +1,31 @@
+version: v1.0
+name: go-build
+agent:
+  machine:
+    type: f1-standard-2
+    os_image: ubuntu2204
+auto_cancel:
+  running:
+    when: "branch != 'master'"
+  queued:
+    when: "branch != 'master'"
+
+# A publish job builds, tests and pushes in one go, where the build and the
+# push used to have a 60-minute budget each in separate pipelines. The
+# ppc64le and s390x builds run under QEMU emulation and are the long pole.
+execution_time_limit:
+  minutes: 120
+
+# Each image has two blocks: one for pull requests that builds and tests, and
+# one for master and release branches that builds, tests and publishes in a
+# single job. Exactly one of the pair runs per event, so an image is built once
+# per commit instead of once per pipeline, and the push happens on the machine
+# that already holds the image.
+#
+# Only the publish blocks carry the `docker` push secret. Semaphore evaluates
+# `run: when:` before scheduling a block, so that secret is never injected into
+# a pull request run, forked or otherwise.
+#
+# Git tags do not build. A push to a release branch publishes both the branch
+# tag and the release tag that create-tag-on-version-change.yml just created,
+# so the tag pipeline has nothing left to do and every block below skips it.
