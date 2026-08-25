@@ -1,0 +1,12 @@
+# Block fragments live in semaphore.yml.d/blocks and are appended here in
+# filename order. The numeric prefix groups blocks by what the image is, which
+# is durable, rather than by how it currently publishes, which is not:
+#
+#   00  repository checks - builds nothing, and every image block waits on it
+#   10  compiler toolchains, the images this repo exists to produce
+#   20  runtime base, shipped inside Calico components
+#   30  multi-arch CI helper
+#
+# The numbers are not build order. No toolchain image is built FROM another;
+# all five build in parallel once Checks has passed.
+blocks:

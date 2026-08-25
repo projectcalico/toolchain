@@ -1,0 +1,180 @@
+# calico/tinygo
+- name: calico/tinygo image
+  dependencies:
+    - Checks
+  run:
+    when: "pull_request =~ '.*' and change_in(['/images/calico-tinygo/', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
+  task:
+    prologue:
+      commands:
+        - export CALICO_TINYGO_IMAGETAG=${SEMAPHORE_GIT_WORKING_BRANCH}
+    jobs:
+      - name: Build and test calico/tinygo
+        commands:
+          - |
+            if hack/image-cache.sh restore calico-tinygo ARCH; then
+              make -C images calico-tinygo-retag ARCH=$ARCH
+            else
+              make -C images calico-tinygo-image ARCH=$ARCH
+              hack/image-cache.sh store calico-tinygo ARCH
+            fi
+          # Compile the test fixture against the just-built image, then
+          # inspect the produced wasm's import section for two failure
+          # classes a downstream consumer (gateway/coraza-wasm) would
+          # otherwise hit:
+          #
+          #   1. wasm-ld undefined symbols at link time. The fixture
+          #      imports github.com/wasilibs/{go-re2, go-libinjection}
+          #      and uses each via os.Args-derived input so TinyGo's
+          #      `-opt=2` optimizer cannot prove the calls dead. If a
+          #      TinyGo or wasi-libc bump breaks the prebuilt-archive
+          #      ABI, the build fails here.
+          #
+          #   2. Runtime `missing import: env.cre2_new` on Envoy. The
+          #      assertion below counts `<- env.cre2_*` imports in the
+          #      wasm; with the TinyGo-compatible go-re2 (currently
+          #      v1.6.0) cre2 resolves internally to the bundled
+          #      static archive and the count is zero. wasilibs/go-re2
+          #      v1.8.0+ removed TinyGo support (libre2 now needs
+          #      Abseil with thread sync, which TinyGo's libc++ shim
+          #      does not provide); a bump to such a version produces
+          #      external env.cre2_* imports and the assertion fails
+          #      here, at toolchain-image build time, not during a
+          #      downstream WAF rebuild.
+          #
+          # The Makefile builds the image as `tinygo:latest-amd64`
+          # locally before retagging it as `calico/tinygo:${branch}-amd64`
+          # for the registry. Use the local tag here — the calico/-
+          # prefixed tag uses the branch, not "latest".
+          - |
+            docker run --rm \
+              -v "$(pwd)/images/calico-tinygo/test/fixture:/src" \
+              -v /tmp:/out \
+              -w /src \
+              tinygo:latest-${ARCH} \
+              sh -c 'go mod download && \
+                tinygo build \
+                  -target=wasip1 \
+                  -gc=precise -opt=2 -scheduler=none \
+                  -tags="nottinygc_envoy memoize_builders" \
+                  -o /out/fixture.wasm . && \
+                file /out/fixture.wasm | grep -q "WebAssembly"'
+          - |
+            count=$(docker run --rm -v /tmp:/host ghcr.io/webassembly/wabt:1.0.36 \
+              wasm-objdump -x /host/fixture.wasm | grep -c "<- env.cre2_" || true)
+            if [ "${count:-0}" -ne 0 ]; then
+              echo >&2 "FAIL: fixture wasm has ${count} env.cre2_* imports (expected 0)"
+              echo >&2 "      A wasilibs/go-re2 bump likely lost TinyGo's bundled libcre2.a;"
+              echo >&2 "      this wasm would fail to load in Envoy with 'missing import: env.cre2_new'."
+              docker run --rm -v /tmp:/host ghcr.io/webassembly/wabt:1.0.36 \
+                wasm-objdump -x /host/fixture.wasm | grep "<- env.cre2_" >&2 || true
+              exit 1
+            fi
+            echo "OK: fixture wasm resolves cre2_* internally (no env.cre2_* imports)"
+        matrix:
+          - env_var: ARCH
+            values: ["amd64", "arm64"]
+
+- name: calico/tinygo image and publish
+  dependencies:
+    - Checks
+  run:
+    when: "pull_request !~ '.*' and (branch = 'master' or branch =~ '^go1\\.') and change_in(['/images/calico-tinygo/', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
+  task:
+    secrets:
+      - name: docker
+    env_vars:
+      - name: DEV_REGISTRIES
+        value: calico
+    prologue:
+      commands:
+        - echo $DOCKER_TOKEN | docker login --username "$DOCKER_USER" --password-stdin
+        - export CALICO_TINYGO_IMAGETAG=${SEMAPHORE_GIT_WORKING_BRANCH}
+        # tinygo is versioned by its own toolchain version, not by the branch.
+        - export TINYGO_VERSION=$(yq -r '.tinygo.version' images/calico-tinygo/versions.yaml)
+    jobs:
+      - name: Build, test and publish calico/tinygo
+        commands:
+          - |
+            if hack/image-cache.sh restore calico-tinygo ARCH; then
+              make -C images calico-tinygo-retag ARCH=$ARCH
+            else
+              make -C images calico-tinygo-image ARCH=$ARCH
+              hack/image-cache.sh store calico-tinygo ARCH
+            fi
+          # Compile the test fixture against the just-built image, then
+          # inspect the produced wasm's import section for two failure
+          # classes a downstream consumer (gateway/coraza-wasm) would
+          # otherwise hit:
+          #
+          #   1. wasm-ld undefined symbols at link time. The fixture
+          #      imports github.com/wasilibs/{go-re2, go-libinjection}
+          #      and uses each via os.Args-derived input so TinyGo's
+          #      `-opt=2` optimizer cannot prove the calls dead. If a
+          #      TinyGo or wasi-libc bump breaks the prebuilt-archive
+          #      ABI, the build fails here.
+          #
+          #   2. Runtime `missing import: env.cre2_new` on Envoy. The
+          #      assertion below counts `<- env.cre2_*` imports in the
+          #      wasm; with the TinyGo-compatible go-re2 (currently
+          #      v1.6.0) cre2 resolves internally to the bundled
+          #      static archive and the count is zero. wasilibs/go-re2
+          #      v1.8.0+ removed TinyGo support (libre2 now needs
+          #      Abseil with thread sync, which TinyGo's libc++ shim
+          #      does not provide); a bump to such a version produces
+          #      external env.cre2_* imports and the assertion fails
+          #      here, at toolchain-image build time, not during a
+          #      downstream WAF rebuild.
+          #
+          # The Makefile builds the image as `tinygo:latest-amd64`
+          # locally before retagging it as `calico/tinygo:${branch}-amd64`
+          # for the registry. Use the local tag here — the calico/-
+          # prefixed tag uses the branch, not "latest".
+          - |
+            docker run --rm \
+              -v "$(pwd)/images/calico-tinygo/test/fixture:/src" \
+              -v /tmp:/out \
+              -w /src \
+              tinygo:latest-${ARCH} \
+              sh -c 'go mod download && \
+                tinygo build \
+                  -target=wasip1 \
+                  -gc=precise -opt=2 -scheduler=none \
+                  -tags="nottinygc_envoy memoize_builders" \
+                  -o /out/fixture.wasm . && \
+                file /out/fixture.wasm | grep -q "WebAssembly"'
+          - |
+            count=$(docker run --rm -v /tmp:/host ghcr.io/webassembly/wabt:1.0.36 \
+              wasm-objdump -x /host/fixture.wasm | grep -c "<- env.cre2_" || true)
+            if [ "${count:-0}" -ne 0 ]; then
+              echo >&2 "FAIL: fixture wasm has ${count} env.cre2_* imports (expected 0)"
+              echo >&2 "      A wasilibs/go-re2 bump likely lost TinyGo's bundled libcre2.a;"
+              echo >&2 "      this wasm would fail to load in Envoy with 'missing import: env.cre2_new'."
+              docker run --rm -v /tmp:/host ghcr.io/webassembly/wabt:1.0.36 \
+                wasm-objdump -x /host/fixture.wasm | grep "<- env.cre2_" >&2 || true
+              exit 1
+            fi
+            echo "OK: fixture wasm resolves cre2_* internally (no env.cre2_* imports)"
+          - make -C images calico-tinygo-push ARCH=$ARCH VALIDARCHES=$ARCH BRANCH_NAME=${TINYGO_VERSION} CONFIRM=true
+        matrix:
+          - env_var: ARCH
+            values: ["amd64", "arm64"]
+
+- name: calico/tinygo manifests
+  dependencies:
+    - calico/tinygo image and publish
+  run:
+    when: "pull_request !~ '.*' and (branch = 'master' or branch =~ '^go1\\.') and change_in(['/images/calico-tinygo/', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
+  task:
+    secrets:
+      - name: docker
+    env_vars:
+      - name: DEV_REGISTRIES
+        value: calico
+    prologue:
+      commands:
+        - echo $DOCKER_TOKEN | docker login --username "$DOCKER_USER" --password-stdin
+    jobs:
+      - name: Push calico/tinygo multi-arch manifest
+        commands:
+          - make -C images push-calico-tinygo-manifests BRANCH_NAME=$(yq -r '.tinygo.version' images/calico-tinygo/versions.yaml) CONFIRM=true

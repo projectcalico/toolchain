@@ -1,0 +1,19 @@
+# Repository checks
+#
+# Every image block depends on this one, so a failure here stops the builds
+# before any QEMU-emulated build starts or anything is published. The block is
+# change-gated and often skips; Semaphore counts a skipped dependency as
+# passed, and this block produces no artifacts, so skipping it is safe.
+- name: Checks
+  dependencies: []
+  run:
+    when: "change_in(['/.semaphore/', '/hack/', '/Makefile'], {pipeline_file: 'track'})"
+  task:
+    jobs:
+      - name: Check generated semaphore.yml
+        commands:
+          - make check-semaphore-yaml
+      - name: Shellcheck
+        commands:
+          - command -v shellcheck >/dev/null || sudo apt-get install -y shellcheck
+          - shellcheck hack/*.sh
