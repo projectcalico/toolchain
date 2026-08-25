@@ -46,6 +46,13 @@ calico-base-image-%: register
 	$(DOCKER_BUILD) --build-arg LDSONAME=$(LDSONAME) --build-arg=UBI_VERSION=$* -t $(CALICO_BASE):$*-latest-$(ARCH) -f calico-base/Dockerfile calico-base/
 	$(MAKE) BUILD_IMAGES=$(CALICO_BASE) retag-build-images-with-registries VALIDARCHES=$(ARCH) LATEST_IMAGE_TAG=$*-latest IMAGETAG=$*-latest
 
+# calico-base-retag applies the registry tags to images already in the local
+# daemon, whether just built or loaded from the image cache.
+.PHONY: calico-base-retag
+calico-base-retag: $(addprefix calico-base-retag-,$(UBI_VERSIONS))
+calico-base-retag-%:
+	$(MAKE) BUILD_IMAGES=$(CALICO_BASE) retag-build-images-with-registries VALIDARCHES=$(ARCH) LATEST_IMAGE_TAG=$*-latest IMAGETAG=$*-latest
+
 .PHONY: calico-base-image-all
 calico-base-image-all: $(addprefix sub-calico-base-image-,$(VALIDARCHES))
 sub-calico-base-image-%:
@@ -116,6 +123,10 @@ calico-binfmt-image: build
 	$(DOCKER_BUILD) --build-arg QEMU_VERSION=$(QEMU_VERSION) -t $(CALICO_BINFMT):$(CALICO_BINFMT_IMAGETAG)-amd64 -f calico-binfmt/Dockerfile calico-binfmt/
 	$(MAKE) BUILD_IMAGES=$(CALICO_BINFMT) retag-build-images-with-registries VALIDARCHES=amd64 LATEST_IMAGE_TAG=$(CALICO_BINFMT_IMAGETAG) IMAGETAG=$(CALICO_BINFMT_IMAGETAG)
 
+.PHONY: calico-binfmt-retag
+calico-binfmt-retag:
+	$(MAKE) BUILD_IMAGES=$(CALICO_BINFMT) retag-build-images-with-registries VALIDARCHES=amd64 LATEST_IMAGE_TAG=$(CALICO_BINFMT_IMAGETAG) IMAGETAG=$(CALICO_BINFMT_IMAGETAG)
+
 .PHONY: calico-binfmt-cd
 calico-binfmt-cd: calico-binfmt-image calico-binfmt-push
 
@@ -133,6 +144,10 @@ CALICO_RUST_BUILD_IMAGETAG ?= latest
 .PHONY: calico-rust-build-image
 calico-rust-build-image: register
 	$(DOCKER_BUILD) -t $(CALICO_RUST_BUILD):latest-$(ARCH) -f calico-rust-build/Dockerfile calico-rust-build/
+	$(MAKE) BUILD_IMAGES=$(CALICO_RUST_BUILD) retag-build-images-with-registries VALIDARCHES=$(ARCH) IMAGETAG=$(CALICO_RUST_BUILD_IMAGETAG)
+
+.PHONY: calico-rust-build-retag
+calico-rust-build-retag:
 	$(MAKE) BUILD_IMAGES=$(CALICO_RUST_BUILD) retag-build-images-with-registries VALIDARCHES=$(ARCH) IMAGETAG=$(CALICO_RUST_BUILD_IMAGETAG)
 
 .PHONY: calico-rust-build-image-all
@@ -162,6 +177,10 @@ CALICO_TINYGO_IMAGETAG ?= latest
 .PHONY: calico-tinygo-image
 calico-tinygo-image: register
 	$(DOCKER_BUILD) -t $(CALICO_TINYGO):latest-$(ARCH) -f calico-tinygo/Dockerfile calico-tinygo/
+	$(MAKE) BUILD_IMAGES=$(CALICO_TINYGO) retag-build-images-with-registries VALIDARCHES=$(ARCH) IMAGETAG=$(CALICO_TINYGO_IMAGETAG)
+
+.PHONY: calico-tinygo-retag
+calico-tinygo-retag:
 	$(MAKE) BUILD_IMAGES=$(CALICO_TINYGO) retag-build-images-with-registries VALIDARCHES=$(ARCH) IMAGETAG=$(CALICO_TINYGO_IMAGETAG)
 
 .PHONY: calico-tinygo-image-all

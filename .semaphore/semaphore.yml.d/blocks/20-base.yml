@@ -8,7 +8,13 @@
     jobs:
       - name: Build calico/base image
         commands:
-          - make -C images calico-base-image ARCH=$ARCH
+          - |
+            if hack/image-cache.sh restore calico-base $ARCH; then
+              make -C images calico-base-retag ARCH=$ARCH
+            else
+              make -C images calico-base-image ARCH=$ARCH
+              hack/image-cache.sh store calico-base $ARCH
+            fi
         matrix:
           - env_var: ARCH
             values: ["amd64", "arm64", "ppc64le", "s390x"]
@@ -34,5 +40,13 @@
     jobs:
       - name: Build and publish calico/base multi-arch images
         commands:
-          - make -C images calico-base-image-all
+          - |
+            for arch in amd64 arm64 ppc64le s390x; do
+              if hack/image-cache.sh restore calico-base "$arch"; then
+                make -C images calico-base-retag ARCH="$arch"
+              else
+                make -C images calico-base-image ARCH="$arch"
+                hack/image-cache.sh store calico-base "$arch"
+              fi
+            done
           - make -C images calico-base-push CONFIRM=true
