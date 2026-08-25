@@ -52,7 +52,14 @@ sub-calico-base-image-%:
 	$(MAKE) calico-base-image ARCH=$*
 
 .PHONY: calico-base-cd
-calico-base-cd: calico-base-image-all var-require-one-of-CONFIRM-DRYRUN var-require-all-BRANCH_NAME
+calico-base-cd: calico-base-image-all calico-base-push
+
+# calico-base-push publishes images that are already in the local daemon. CI
+# builds and publishes in one job, so a push never rebuilds. All architectures
+# and both UBI versions share a single BRANCH_NAME, so they are pushed together
+# rather than per-arch.
+.PHONY: calico-base-push
+calico-base-push: var-require-one-of-CONFIRM-DRYRUN var-require-all-BRANCH_NAME
 	$(foreach version,$(UBI_VERSIONS),$(MAKE) BUILD_IMAGES=$(CALICO_BASE) retag-build-images-with-registries push-images-to-registries push-manifests LATEST_IMAGE_TAG=$(version)-latest IMAGETAG=$(version)-$(BRANCH_NAME) EXCLUDEARCH="$(EXCLUDEARCH)";)
 
 ################################################################################
@@ -64,6 +71,12 @@ CALICO_GO_BUILD_IMAGETAG ?= latest
 .PHONY: calico-go-build-image
 calico-go-build-image: register build
 	$(DOCKER_BUILD) -t $(CALICO_GO_BUILD):latest-$(ARCH) -f calico-go-build/Dockerfile calico-go-build/
+	$(MAKE) calico-go-build-retag
+
+# calico-go-build-retag applies the registry tags to an image that is already in
+# the local daemon, whether it was just built or loaded from the image cache.
+.PHONY: calico-go-build-retag
+calico-go-build-retag:
 	$(MAKE) BUILD_IMAGES=$(CALICO_GO_BUILD) retag-build-images-with-registries VALIDARCHES=$(ARCH) IMAGETAG=$(CALICO_GO_BUILD_IMAGETAG)
 
 .PHONY: calico-go-build-image-all
@@ -72,7 +85,11 @@ sub-calico-go-build-image-%:
 	$(MAKE) calico-go-build-image ARCH=$*
 
 .PHONY: calico-go-build-cd
-calico-go-build-cd: calico-go-build-image var-require-one-of-CONFIRM-DRYRUN var-require-all-BRANCH_NAME
+calico-go-build-cd: calico-go-build-image calico-go-build-push
+
+# calico-go-build-push publishes an image that is already in the local daemon.
+.PHONY: calico-go-build-push
+calico-go-build-push: var-require-one-of-CONFIRM-DRYRUN var-require-all-BRANCH_NAME
 	$(MAKE) BUILD_IMAGES=$(CALICO_GO_BUILD) retag-build-images-with-registries push-images-to-registries IMAGETAG=$(BRANCH_NAME) EXCLUDEARCH="$(EXCLUDEARCH)"
 ifeq ($(BRANCH_NAME),master)
 	$(MAKE) BUILD_IMAGES=$(CALICO_GO_BUILD) retag-build-images-with-registries push-images-to-registries IMAGETAG=latest EXCLUDEARCH="$(EXCLUDEARCH)"
@@ -100,7 +117,11 @@ calico-binfmt-image: build
 	$(MAKE) BUILD_IMAGES=$(CALICO_BINFMT) retag-build-images-with-registries VALIDARCHES=amd64 LATEST_IMAGE_TAG=$(CALICO_BINFMT_IMAGETAG) IMAGETAG=$(CALICO_BINFMT_IMAGETAG)
 
 .PHONY: calico-binfmt-cd
-calico-binfmt-cd: calico-binfmt-image var-require-one-of-CONFIRM-DRYRUN
+calico-binfmt-cd: calico-binfmt-image calico-binfmt-push
+
+# calico-binfmt-push publishes an image that is already in the local daemon.
+.PHONY: calico-binfmt-push
+calico-binfmt-push: var-require-one-of-CONFIRM-DRYRUN
 	$(MAKE) BUILD_IMAGES=$(CALICO_BINFMT) retag-build-images-with-registries push-images-to-registries IMAGETAG=$(CALICO_BINFMT_IMAGETAG) LATEST_IMAGE_TAG=$(CALICO_BINFMT_IMAGETAG) VALIDARCHES=amd64 EXCLUDEARCH="$(EXCLUDEARCH)"
 
 ################################################################################
@@ -120,7 +141,11 @@ sub-calico-rust-build-image-%:
 	$(MAKE) calico-rust-build-image ARCH=$*
 
 .PHONY: calico-rust-build-cd
-calico-rust-build-cd: calico-rust-build-image var-require-one-of-CONFIRM-DRYRUN var-require-all-BRANCH_NAME
+calico-rust-build-cd: calico-rust-build-image calico-rust-build-push
+
+# calico-rust-build-push publishes an image that is already in the local daemon.
+.PHONY: calico-rust-build-push
+calico-rust-build-push: var-require-one-of-CONFIRM-DRYRUN var-require-all-BRANCH_NAME
 	$(MAKE) BUILD_IMAGES=$(CALICO_RUST_BUILD) retag-build-images-with-registries push-images-to-registries IMAGETAG=$(BRANCH_NAME) EXCLUDEARCH="$(EXCLUDEARCH)"
 
 .PHONY: push-calico-rust-build-manifests
@@ -145,7 +170,11 @@ sub-calico-tinygo-image-%:
 	$(MAKE) calico-tinygo-image ARCH=$*
 
 .PHONY: calico-tinygo-cd
-calico-tinygo-cd: calico-tinygo-image var-require-one-of-CONFIRM-DRYRUN var-require-all-BRANCH_NAME
+calico-tinygo-cd: calico-tinygo-image calico-tinygo-push
+
+# calico-tinygo-push publishes an image that is already in the local daemon.
+.PHONY: calico-tinygo-push
+calico-tinygo-push: var-require-one-of-CONFIRM-DRYRUN var-require-all-BRANCH_NAME
 	$(MAKE) BUILD_IMAGES=$(CALICO_TINYGO) retag-build-images-with-registries push-images-to-registries IMAGETAG=$(BRANCH_NAME) VALIDARCHES=$(ARCH)
 
 .PHONY: push-calico-tinygo-manifests
