@@ -1,3 +1,6 @@
+# !! WARNING, DO NOT EDIT !! This file is generated from the fragments
+# in /.semaphore/semaphore.yml.d. To update, modify the relevant
+# fragment and then run 'make gen-semaphore-yaml'.
 version: v1.0
 name: go-build
 agent:
@@ -10,9 +13,25 @@ auto_cancel:
   queued:
     when: "branch != 'master'"
 
+# A publish job builds, tests and pushes in one go, where the build and the
+# push used to have a 60-minute budget each in separate pipelines. The
+# ppc64le and s390x builds run under QEMU emulation and are the long pole.
 execution_time_limit:
-  minutes: 60
+  minutes: 120
 
+# Each image has two blocks: one for pull requests that builds and tests, and
+# one for master and release branches that builds, tests and publishes in a
+# single job. Exactly one of the pair runs per event, so an image is built once
+# per commit instead of once per pipeline, and the push happens on the machine
+# that already holds the image.
+#
+# Only the publish blocks carry the `docker` push secret. Semaphore evaluates
+# `run: when:` before scheduling a block, so that secret is never injected into
+# a pull request run, forked or otherwise.
+#
+# Git tags do not build. A push to a release branch publishes both the branch
+# tag and the release tag that create-tag-on-version-change.yml just created,
+# so the tag pipeline has nothing left to do and every block below skips it.
 global_job_config:
   secrets:
     - name: docker-hub
@@ -23,35 +42,44 @@ global_job_config:
       # Semaphore is doing shallow clone on a commit without tags.
       # unshallow it for GIT_VERSION:=$(shell git describe --tags --dirty --always) @ Makefile.common
       - git fetch --unshallow
-
-promotions:
-  # Publish base, binfmt, and go-build images for master or release tags (example: 1.23.3-llvm18.1.8-k8s1.30.5).
-  - name: Publish calico/base images
-    pipeline_file: promotions/calico-base.yml
-    auto_promote:
-      when: "branch = 'master' OR tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+\\.\\d\\.\\d-k8s1\\.\\d+\\.\\d+'"
-  - name: Publish calico/binfmt images
-    pipeline_file: promotions/calico-binfmt.yml
-    auto_promote:
-      when: "branch = 'master' OR tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+\\.\\d\\.\\d-k8s1\\.\\d+\\.\\d+'"
-  - name: Publish calico/go-build images
-    pipeline_file: promotions/calico-go-build.yml
-    auto_promote:
-      when: "branch = 'master' OR tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+\\.\\d\\.\\d-k8s1\\.\\d+\\.\\d+'"
-  # Publish rust-build images for master and files under images/calico-rust-build have changed.
-  - name: Publish calico/rust-build images
-    pipeline_file: promotions/calico-rust-build.yml
-    auto_promote:
-      when: "branch = 'master' AND change_in('/images/calico-rust-build/')"
-  # Publish tinygo images for master and files under images/calico-tinygo have changed.
-  - name: Publish calico/tinygo images
-    pipeline_file: promotions/calico-tinygo.yml
-    auto_promote:
-      when: "branch = 'master' AND change_in('/images/calico-tinygo/')"
-
+      - touch ~/publish.env
+# Block fragments live in semaphore.yml.d/blocks and are appended here in
+# filename order. The numeric prefix groups blocks by what the image is, which
+# is durable, rather than by how it currently publishes, which is not:
+#
+#   00  repository checks - builds nothing, and every image block waits on it
+#   10  compiler toolchains, the images this repo exists to produce
+#   20  runtime base, shipped inside Calico components
+#   30  multi-arch CI helper
+#
+# The numbers are not build order. No toolchain image is built FROM another;
+# all five build in parallel once Checks has passed.
 blocks:
-  - name: calico/go-build image
+  # Repository checks
+  #
+  # Every image block depends on this one, so a failure here stops the builds
+  # before any QEMU-emulated build starts or anything is published. The block is
+  # change-gated and often skips; Semaphore counts a skipped dependency as
+  # passed, and this block produces no artifacts, so skipping it is safe.
+  - name: Checks
     dependencies: []
+    run:
+      when: "change_in(['/.semaphore/', '/hack/', '/Makefile'], {pipeline_file: 'track'})"
+    task:
+      jobs:
+        - name: Check generated semaphore.yml
+          commands:
+            - make check-semaphore-yaml
+        - name: Shellcheck
+          commands:
+            - command -v shellcheck >/dev/null || sudo apt-get install -y shellcheck
+            - shellcheck hack/*.sh
+  # calico/go-build
+  - name: calico/go-build image
+    dependencies:
+      - Checks
+    run:
+      when: "pull_request =~ '.*' and change_in(['/images/calico-go-build/', '/cmd/', '/go.mod', '/go.sum', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
     task:
       env_vars:
         # The branch to test the current go-build against
@@ -59,14 +87,9 @@ blocks:
           value: master
       prologue:
         commands:
-          - |
-            if [ "${SEMAPHORE_GIT_REF_TYPE}" = "tag" ]; then
-              export CALICO_GO_BUILD_IMAGETAG=${SEMAPHORE_GIT_TAG_NAME}
-            else
-              export CALICO_GO_BUILD_IMAGETAG=${SEMAPHORE_GIT_WORKING_BRANCH}
-            fi
+          - export CALICO_GO_BUILD_IMAGETAG=${SEMAPHORE_GIT_WORKING_BRANCH}
       jobs:
-        - name: Build calico/go-build image
+        - name: Build and test calico/go-build image
           commands:
             - make -C images calico-go-build-image ARCH=$ARCH
             - git clone -b "${CALICO_BRANCH}" --depth 1 git@github.com:projectcalico/calico.git calico
@@ -77,17 +100,90 @@ blocks:
             - env_var: ARCH
               values: ["amd64", "arm64", "ppc64le", "s390x"]
 
+  - name: calico/go-build image and publish
+    dependencies:
+      - Checks
+    run:
+      when: "(branch = 'master' or branch =~ '^go1\\.') and change_in(['/images/calico-go-build/', '/cmd/', '/go.mod', '/go.sum', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
+    task:
+      secrets:
+        - name: docker
+      env_vars:
+        - name: DEV_REGISTRIES
+          value: calico
+        - name: CALICO_BRANCH
+          value: master
+      prologue:
+        commands:
+          - echo $DOCKER_TOKEN | docker login --username "$DOCKER_USER" --password-stdin
+          - export CALICO_GO_BUILD_IMAGETAG=${SEMAPHORE_GIT_WORKING_BRANCH}
+      jobs:
+        - name: Build, test and publish calico/go-build image
+          commands:
+            - make -C images calico-go-build-image ARCH=$ARCH
+            - git clone -b "${CALICO_BRANCH}" --depth 1 git@github.com:projectcalico/calico.git calico
+            - sed -i 's/^GO_BUILD_VER=.*$/GO_BUILD_VER=${CALICO_GO_BUILD_IMAGETAG}/' calico/metadata.mk
+            - if [ "${ARCH}" == "amd64" ]; then ( cd calico/felix && make ut ); fi
+            # The release tag is created by create-tag-on-version-change.yml
+            # within a minute of the push; this job reaches here ~20 minutes
+            # later. Fetch now rather than in the prologue so the tag is visible.
+            - git fetch --tags --force
+            - |
+              export RELEASE_TAG=$(git tag --points-at HEAD | grep -E '^[0-9]+\.[0-9]+\.[0-9]+-llvm' | sort -V | tail -1)
+              if [ -z "${RELEASE_TAG}" ] && [ "${SEMAPHORE_GIT_WORKING_BRANCH}" != "master" ]; then
+                echo >&2 "FAIL: no release tag points at HEAD on ${SEMAPHORE_GIT_WORKING_BRANCH}."
+                echo >&2 "      create-tag-on-version-change.yml should have created one."
+                exit 1
+              fi
+              echo "RELEASE_TAG=${RELEASE_TAG}" >> ~/publish.env
+            # Publish only after the tests above have passed.
+            - make -C images calico-go-build-push VALIDARCHES=$ARCH ARCH=$ARCH BRANCH_NAME=${SEMAPHORE_GIT_WORKING_BRANCH} CONFIRM=true
+            - |
+              . ~/publish.env
+              if [ -n "${RELEASE_TAG}" ]; then
+                make -C images calico-go-build-push VALIDARCHES=$ARCH ARCH=$ARCH BRANCH_NAME=${RELEASE_TAG} CONFIRM=true
+              fi
+          matrix:
+            - env_var: ARCH
+              values: ["amd64", "arm64", "ppc64le", "s390x"]
+
+  - name: calico/go-build manifests
+    dependencies:
+      - calico/go-build image and publish
+    run:
+      when: "(branch = 'master' or branch =~ '^go1\\.') and change_in(['/images/calico-go-build/', '/cmd/', '/go.mod', '/go.sum', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
+    task:
+      secrets:
+        - name: docker
+        - name: semaphore-api
+      env_vars:
+        - name: DEV_REGISTRIES
+          value: calico
+      prologue:
+        commands:
+          - echo $DOCKER_TOKEN | docker login --username "$DOCKER_USER" --password-stdin
+      jobs:
+        - name: Push calico/go-build multi-arch manifests
+          commands:
+            - git fetch --tags --force
+            - make -C images push-calico-go-build-manifests BRANCH_NAME=${SEMAPHORE_GIT_WORKING_BRANCH} CONFIRM=true
+            - |
+              RELEASE_TAG=$(git tag --points-at HEAD | grep -E '^[0-9]+\.[0-9]+\.[0-9]+-llvm' | sort -V | tail -1)
+              if [ -n "${RELEASE_TAG}" ]; then
+                make -C images push-calico-go-build-manifests BRANCH_NAME=${RELEASE_TAG} CONFIRM=true
+                # Tell downstream repos to pin the tag we just published.
+                make update-go-build-pins CONFIRM=true
+              fi
+  # calico/rust-build
   - name: calico/rust-build image
-    dependencies: []
+    dependencies:
+      - Checks
+    run:
+      when: "pull_request =~ '.*' and change_in(['/images/calico-rust-build/', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
     task:
       prologue:
         commands:
-          - |
-            if [ "${SEMAPHORE_GIT_REF_TYPE}" = "tag" ]; then
-              export CALICO_RUST_BUILD_IMAGETAG=${SEMAPHORE_GIT_TAG_NAME}
-            else
-              export CALICO_RUST_BUILD_IMAGETAG=${SEMAPHORE_GIT_WORKING_BRANCH}
-            fi
+          - export CALICO_RUST_BUILD_IMAGETAG=${SEMAPHORE_GIT_WORKING_BRANCH}
       jobs:
         - name: Build calico/rust-build image
           commands:
@@ -96,36 +192,60 @@ blocks:
             - env_var: ARCH
               values: ["amd64", "arm64", "ppc64le", "s390x"]
 
-  - name: calico/base image
-    dependencies: []
+  - name: calico/rust-build image and publish
+    dependencies:
+      - Checks
+    run:
+      when: "(branch = 'master' or branch =~ '^go1\\.') and change_in(['/images/calico-rust-build/', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
     task:
+      secrets:
+        - name: docker
+      env_vars:
+        - name: DEV_REGISTRIES
+          value: calico
+      prologue:
+        commands:
+          - echo $DOCKER_TOKEN | docker login --username "$DOCKER_USER" --password-stdin
+          - export CALICO_RUST_BUILD_IMAGETAG=${SEMAPHORE_GIT_WORKING_BRANCH}
+          # rust-build is versioned by its own toolchain version, not by the branch.
+          - export RUST_VERSION=$(yq -r '.rust.version' images/calico-rust-build/versions.yaml)
       jobs:
-        - name: Build calico/base image
+        - name: Build and publish calico/rust-build image
           commands:
-            - make -C images calico-base-image ARCH=$ARCH
+            - make -C images calico-rust-build-image ARCH=$ARCH
+            - make -C images calico-rust-build-push VALIDARCHES=$ARCH ARCH=$ARCH BRANCH_NAME=${RUST_VERSION} CONFIRM=true
           matrix:
             - env_var: ARCH
               values: ["amd64", "arm64", "ppc64le", "s390x"]
 
-  - name: calico/binfmt image
-    dependencies: []
+  - name: calico/rust-build manifests
+    dependencies:
+      - calico/rust-build image and publish
+    run:
+      when: "(branch = 'master' or branch =~ '^go1\\.') and change_in(['/images/calico-rust-build/', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
     task:
+      secrets:
+        - name: docker
+      env_vars:
+        - name: DEV_REGISTRIES
+          value: calico
+      prologue:
+        commands:
+          - echo $DOCKER_TOKEN | docker login --username "$DOCKER_USER" --password-stdin
       jobs:
-        - name: Build calico/binfmt amd64 image
+        - name: Push calico/rust-build multi-arch manifests
           commands:
-            - make -C images calico-binfmt-image ARCH=amd64
-
+            - make -C images push-calico-rust-build-manifests BRANCH_NAME=$(yq -r '.rust.version' images/calico-rust-build/versions.yaml) CONFIRM=true
+  # calico/tinygo
   - name: calico/tinygo image
-    dependencies: []
+    dependencies:
+      - Checks
+    run:
+      when: "pull_request =~ '.*' and change_in(['/images/calico-tinygo/', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
     task:
       prologue:
         commands:
-          - |
-            if [ "${SEMAPHORE_GIT_REF_TYPE}" = "tag" ]; then
-              export CALICO_TINYGO_IMAGETAG=${SEMAPHORE_GIT_TAG_NAME}
-            else
-              export CALICO_TINYGO_IMAGETAG=${SEMAPHORE_GIT_WORKING_BRANCH}
-            fi
+          - export CALICO_TINYGO_IMAGETAG=${SEMAPHORE_GIT_WORKING_BRANCH}
       jobs:
         - name: Build and test calico/tinygo
           commands:
@@ -186,3 +306,170 @@ blocks:
           matrix:
             - env_var: ARCH
               values: ["amd64", "arm64"]
+
+  - name: calico/tinygo image and publish
+    dependencies:
+      - Checks
+    run:
+      when: "(branch = 'master' or branch =~ '^go1\\.') and change_in(['/images/calico-tinygo/', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
+    task:
+      secrets:
+        - name: docker
+      env_vars:
+        - name: DEV_REGISTRIES
+          value: calico
+      prologue:
+        commands:
+          - echo $DOCKER_TOKEN | docker login --username "$DOCKER_USER" --password-stdin
+          - export CALICO_TINYGO_IMAGETAG=${SEMAPHORE_GIT_WORKING_BRANCH}
+          # tinygo is versioned by its own toolchain version, not by the branch.
+          - export TINYGO_VERSION=$(yq -r '.tinygo.version' images/calico-tinygo/versions.yaml)
+      jobs:
+        - name: Build, test and publish calico/tinygo
+          commands:
+            - make -C images calico-tinygo-image ARCH=$ARCH
+            # Compile the test fixture against the just-built image, then
+            # inspect the produced wasm's import section for two failure
+            # classes a downstream consumer (gateway/coraza-wasm) would
+            # otherwise hit:
+            #
+            #   1. wasm-ld undefined symbols at link time. The fixture
+            #      imports github.com/wasilibs/{go-re2, go-libinjection}
+            #      and uses each via os.Args-derived input so TinyGo's
+            #      `-opt=2` optimizer cannot prove the calls dead. If a
+            #      TinyGo or wasi-libc bump breaks the prebuilt-archive
+            #      ABI, the build fails here.
+            #
+            #   2. Runtime `missing import: env.cre2_new` on Envoy. The
+            #      assertion below counts `<- env.cre2_*` imports in the
+            #      wasm; with the TinyGo-compatible go-re2 (currently
+            #      v1.6.0) cre2 resolves internally to the bundled
+            #      static archive and the count is zero. wasilibs/go-re2
+            #      v1.8.0+ removed TinyGo support (libre2 now needs
+            #      Abseil with thread sync, which TinyGo's libc++ shim
+            #      does not provide); a bump to such a version produces
+            #      external env.cre2_* imports and the assertion fails
+            #      here, at toolchain-image build time, not during a
+            #      downstream WAF rebuild.
+            #
+            # The Makefile builds the image as `tinygo:latest-amd64`
+            # locally before retagging it as `calico/tinygo:${branch}-amd64`
+            # for the registry. Use the local tag here — the calico/-
+            # prefixed tag uses the branch, not "latest".
+            - |
+              docker run --rm \
+                -v "$(pwd)/images/calico-tinygo/test/fixture:/src" \
+                -v /tmp:/out \
+                -w /src \
+                tinygo:latest-${ARCH} \
+                sh -c 'go mod download && \
+                  tinygo build \
+                    -target=wasip1 \
+                    -gc=precise -opt=2 -scheduler=none \
+                    -tags="nottinygc_envoy memoize_builders" \
+                    -o /out/fixture.wasm . && \
+                  file /out/fixture.wasm | grep -q "WebAssembly"'
+            - |
+              count=$(docker run --rm -v /tmp:/host ghcr.io/webassembly/wabt:1.0.36 \
+                wasm-objdump -x /host/fixture.wasm | grep -c "<- env.cre2_" || true)
+              if [ "${count:-0}" -ne 0 ]; then
+                echo >&2 "FAIL: fixture wasm has ${count} env.cre2_* imports (expected 0)"
+                echo >&2 "      A wasilibs/go-re2 bump likely lost TinyGo's bundled libcre2.a;"
+                echo >&2 "      this wasm would fail to load in Envoy with 'missing import: env.cre2_new'."
+                docker run --rm -v /tmp:/host ghcr.io/webassembly/wabt:1.0.36 \
+                  wasm-objdump -x /host/fixture.wasm | grep "<- env.cre2_" >&2 || true
+                exit 1
+              fi
+              echo "OK: fixture wasm resolves cre2_* internally (no env.cre2_* imports)"
+            - make -C images calico-tinygo-push ARCH=$ARCH VALIDARCHES=$ARCH BRANCH_NAME=${TINYGO_VERSION} CONFIRM=true
+          matrix:
+            - env_var: ARCH
+              values: ["amd64", "arm64"]
+
+  - name: calico/tinygo manifests
+    dependencies:
+      - calico/tinygo image and publish
+    run:
+      when: "(branch = 'master' or branch =~ '^go1\\.') and change_in(['/images/calico-tinygo/', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
+    task:
+      secrets:
+        - name: docker
+      env_vars:
+        - name: DEV_REGISTRIES
+          value: calico
+      prologue:
+        commands:
+          - echo $DOCKER_TOKEN | docker login --username "$DOCKER_USER" --password-stdin
+      jobs:
+        - name: Push calico/tinygo multi-arch manifest
+          commands:
+            - make -C images push-calico-tinygo-manifests BRANCH_NAME=$(yq -r '.tinygo.version' images/calico-tinygo/versions.yaml) CONFIRM=true
+  # calico/base
+  - name: calico/base image
+    dependencies:
+      - Checks
+    run:
+      when: "pull_request =~ '.*' and change_in(['/images/calico-base/', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
+    task:
+      jobs:
+        - name: Build calico/base image
+          commands:
+            - make -C images calico-base-image ARCH=$ARCH
+          matrix:
+            - env_var: ARCH
+              values: ["amd64", "arm64", "ppc64le", "s390x"]
+
+  - name: calico/base image and publish
+    dependencies:
+      - Checks
+    run:
+      when: "(branch = 'master' or branch =~ '^go1\\.') and change_in(['/images/calico-base/', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
+    task:
+      secrets:
+        - name: docker
+      env_vars:
+        - name: DEV_REGISTRIES
+          value: calico
+        # Every architecture and both UBI versions must share one tag, so base
+        # builds and publishes in a single job rather than a per-arch matrix.
+        - name: BRANCH_NAME
+          value: ${SEMAPHORE_JOB_CREATION_TIME}
+      prologue:
+        commands:
+          - echo $DOCKER_TOKEN | docker login --username "$DOCKER_USER" --password-stdin
+      jobs:
+        - name: Build and publish calico/base multi-arch images
+          commands:
+            - make -C images calico-base-image-all
+            - make -C images calico-base-push CONFIRM=true
+  # calico/binfmt
+  - name: calico/binfmt image
+    dependencies:
+      - Checks
+    run:
+      when: "pull_request =~ '.*' and change_in(['/images/calico-binfmt/', '/cmd/', '/go.mod', '/go.sum', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
+    task:
+      jobs:
+        - name: Build calico/binfmt amd64 image
+          commands:
+            - make -C images calico-binfmt-image ARCH=amd64
+
+  - name: calico/binfmt image and publish
+    dependencies:
+      - Checks
+    run:
+      when: "(branch = 'master' or branch =~ '^go1\\.') and change_in(['/images/calico-binfmt/', '/cmd/', '/go.mod', '/go.sum', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
+    task:
+      secrets:
+        - name: docker
+      env_vars:
+        - name: DEV_REGISTRIES
+          value: calico
+      prologue:
+        commands:
+          - echo $DOCKER_TOKEN | docker login --username "$DOCKER_USER" --password-stdin
+      jobs:
+        - name: Build and publish calico/binfmt amd64 image
+          commands:
+            - make -C images calico-binfmt-image ARCH=amd64
+            - make -C images calico-binfmt-push CONFIRM=true
