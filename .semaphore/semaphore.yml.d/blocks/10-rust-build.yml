@@ -1,0 +1,74 @@
+# calico/rust-build
+- name: calico/rust-build image
+  dependencies:
+    - Checks
+  run:
+    when: "pull_request =~ '.*' and change_in(['/images/calico-rust-build/', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
+  task:
+    prologue:
+      commands:
+        - export CALICO_RUST_BUILD_IMAGETAG=${SEMAPHORE_GIT_WORKING_BRANCH}
+    jobs:
+      - name: Build calico/rust-build image
+        commands:
+          - |
+            if hack/image-cache.sh restore calico-rust-build ARCH; then
+              make -C images calico-rust-build-retag ARCH=$ARCH
+            else
+              make -C images calico-rust-build-image ARCH=$ARCH
+              hack/image-cache.sh store calico-rust-build ARCH
+            fi
+        matrix:
+          - env_var: ARCH
+            values: ["amd64", "arm64", "ppc64le", "s390x"]
+
+- name: calico/rust-build image and publish
+  dependencies:
+    - Checks
+  run:
+    when: "pull_request !~ '.*' and (branch = 'master' or branch =~ '^go1\\.') and change_in(['/images/calico-rust-build/', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
+  task:
+    secrets:
+      - name: docker
+    env_vars:
+      - name: DEV_REGISTRIES
+        value: calico
+    prologue:
+      commands:
+        - echo $DOCKER_TOKEN | docker login --username "$DOCKER_USER" --password-stdin
+        - export CALICO_RUST_BUILD_IMAGETAG=${SEMAPHORE_GIT_WORKING_BRANCH}
+        # rust-build is versioned by its own toolchain version, not by the branch.
+        - export RUST_VERSION=$(yq -r '.rust.version' images/calico-rust-build/versions.yaml)
+    jobs:
+      - name: Build and publish calico/rust-build image
+        commands:
+          - |
+            if hack/image-cache.sh restore calico-rust-build ARCH; then
+              make -C images calico-rust-build-retag ARCH=$ARCH
+            else
+              make -C images calico-rust-build-image ARCH=$ARCH
+              hack/image-cache.sh store calico-rust-build ARCH
+            fi
+          - make -C images calico-rust-build-push VALIDARCHES=$ARCH ARCH=$ARCH BRANCH_NAME=${RUST_VERSION} CONFIRM=true
+        matrix:
+          - env_var: ARCH
+            values: ["amd64", "arm64", "ppc64le", "s390x"]
+
+- name: calico/rust-build manifests
+  dependencies:
+    - calico/rust-build image and publish
+  run:
+    when: "pull_request !~ '.*' and (branch = 'master' or branch =~ '^go1\\.') and change_in(['/images/calico-rust-build/', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
+  task:
+    secrets:
+      - name: docker
+    env_vars:
+      - name: DEV_REGISTRIES
+        value: calico
+    prologue:
+      commands:
+        - echo $DOCKER_TOKEN | docker login --username "$DOCKER_USER" --password-stdin
+    jobs:
+      - name: Push calico/rust-build multi-arch manifests
+        commands:
+          - make -C images push-calico-rust-build-manifests BRANCH_NAME=$(yq -r '.rust.version' images/calico-rust-build/versions.yaml) CONFIRM=true
