@@ -15,7 +15,13 @@
     jobs:
       - name: Build and test calico/go-build image
         commands:
-          - make -C images calico-go-build-image ARCH=$ARCH
+          - |
+            if hack/image-cache.sh restore calico-go-build $ARCH; then
+              make -C images calico-go-build-retag ARCH=$ARCH
+            else
+              make -C images calico-go-build-image ARCH=$ARCH
+              hack/image-cache.sh store calico-go-build $ARCH
+            fi
           - git clone -b "${CALICO_BRANCH}" --depth 1 git@github.com:projectcalico/calico.git calico
           - cd calico
           - sed -i 's/^GO_BUILD_VER=.*$/GO_BUILD_VER=${CALICO_GO_BUILD_IMAGETAG}/' metadata.mk
@@ -44,7 +50,14 @@
     jobs:
       - name: Build, test and publish calico/go-build image
         commands:
-          - make -C images calico-go-build-image ARCH=$ARCH
+          # A merge normally finds the image its pull request already built.
+          - |
+            if hack/image-cache.sh restore calico-go-build $ARCH; then
+              make -C images calico-go-build-retag ARCH=$ARCH
+            else
+              make -C images calico-go-build-image ARCH=$ARCH
+              hack/image-cache.sh store calico-go-build $ARCH
+            fi
           - git clone -b "${CALICO_BRANCH}" --depth 1 git@github.com:projectcalico/calico.git calico
           - sed -i 's/^GO_BUILD_VER=.*$/GO_BUILD_VER=${CALICO_GO_BUILD_IMAGETAG}/' calico/metadata.mk
           - if [ "${ARCH}" == "amd64" ]; then ( cd calico/felix && make ut ); fi

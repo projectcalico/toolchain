@@ -11,7 +11,13 @@
     jobs:
       - name: Build calico/rust-build image
         commands:
-          - make -C images calico-rust-build-image ARCH=$ARCH
+          - |
+            if hack/image-cache.sh restore calico-rust-build ARCH; then
+              make -C images calico-rust-build-retag ARCH=$ARCH
+            else
+              make -C images calico-rust-build-image ARCH=$ARCH
+              hack/image-cache.sh store calico-rust-build ARCH
+            fi
         matrix:
           - env_var: ARCH
             values: ["amd64", "arm64", "ppc64le", "s390x"]
@@ -36,7 +42,13 @@
     jobs:
       - name: Build and publish calico/rust-build image
         commands:
-          - make -C images calico-rust-build-image ARCH=$ARCH
+          - |
+            if hack/image-cache.sh restore calico-rust-build ARCH; then
+              make -C images calico-rust-build-retag ARCH=$ARCH
+            else
+              make -C images calico-rust-build-image ARCH=$ARCH
+              hack/image-cache.sh store calico-rust-build ARCH
+            fi
           - make -C images calico-rust-build-push VALIDARCHES=$ARCH ARCH=$ARCH BRANCH_NAME=${RUST_VERSION} CONFIRM=true
         matrix:
           - env_var: ARCH
