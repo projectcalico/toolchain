@@ -1,0 +1,43 @@
+# calico/binfmt
+- name: calico/binfmt image
+  dependencies:
+    - Checks
+  run:
+    when: "pull_request =~ '.*' and change_in(['/images/calico-binfmt/', '/cmd/', '/go.mod', '/go.sum', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
+  task:
+    jobs:
+      - name: Build calico/binfmt amd64 image
+        commands:
+          - |
+            if hack/image-cache.sh restore calico-binfmt amd64; then
+              make -C images calico-binfmt-retag
+            else
+              make -C images calico-binfmt-image ARCH=amd64
+              hack/image-cache.sh store calico-binfmt amd64
+            fi
+
+- name: calico/binfmt image and publish
+  dependencies:
+    - Checks
+  run:
+    when: "pull_request !~ '.*' and (branch = 'master' or branch =~ '^go1\\.') and change_in(['/images/calico-binfmt/', '/cmd/', '/go.mod', '/go.sum', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
+  task:
+    secrets:
+      - name: docker
+    env_vars:
+      - name: DEV_REGISTRIES
+        value: calico
+    prologue:
+      commands:
+        - echo $DOCKER_TOKEN | docker login --username "$DOCKER_USER" --password-stdin
+    jobs:
+      - name: Build and publish calico/binfmt amd64 image
+        commands:
+          - |
+            if hack/image-cache.sh restore calico-binfmt amd64; then
+              make -C images calico-binfmt-retag
+            else
+              make -C images calico-binfmt-image ARCH=amd64
+              hack/image-cache.sh store calico-binfmt amd64
+            fi
+          - make -C images calico-binfmt-push CONFIRM=true

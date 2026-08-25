@@ -1,0 +1,52 @@
+# calico/base
+- name: calico/base image
+  dependencies:
+    - Checks
+  run:
+    when: "pull_request =~ '.*' and change_in(['/images/calico-base/', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
+  task:
+    jobs:
+      - name: Build calico/base image
+        commands:
+          - |
+            if hack/image-cache.sh restore calico-base $ARCH; then
+              make -C images calico-base-retag ARCH=$ARCH
+            else
+              make -C images calico-base-image ARCH=$ARCH
+              hack/image-cache.sh store calico-base $ARCH
+            fi
+        matrix:
+          - env_var: ARCH
+            values: ["amd64", "arm64", "ppc64le", "s390x"]
+
+- name: calico/base image and publish
+  dependencies:
+    - Checks
+  run:
+    when: "pull_request !~ '.*' and (branch = 'master' or branch =~ '^go1\\.') and change_in(['/images/calico-base/', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
+  task:
+    secrets:
+      - name: docker
+    env_vars:
+      - name: DEV_REGISTRIES
+        value: calico
+      # Every architecture and both UBI versions must share one tag, so base
+      # builds and publishes in a single job rather than a per-arch matrix.
+      - name: BRANCH_NAME
+        value: ${SEMAPHORE_JOB_CREATION_TIME}
+    prologue:
+      commands:
+        - echo $DOCKER_TOKEN | docker login --username "$DOCKER_USER" --password-stdin
+    jobs:
+      - name: Build and publish calico/base multi-arch images
+        commands:
+          - |
+            for arch in amd64 arm64 ppc64le s390x; do
+              if hack/image-cache.sh restore calico-base "$arch"; then
+                make -C images calico-base-retag ARCH="$arch"
+              else
+                make -C images calico-base-image ARCH="$arch"
+                hack/image-cache.sh store calico-base "$arch"
+              fi
+            done
+          - make -C images calico-base-push CONFIRM=true
