@@ -8,7 +8,13 @@
     jobs:
       - name: Build calico/base image
         commands:
-          - make -C images calico-base-image ARCH=$ARCH
+          - |
+            if hack/image-cache.sh restore calico-base $ARCH; then
+              make -C images calico-base-retag ARCH=$ARCH
+            else
+              make -C images calico-base-image ARCH=$ARCH
+              hack/image-cache.sh store calico-base $ARCH
+            fi
         matrix:
           - env_var: ARCH
             values: ["amd64", "arm64", "ppc64le", "s390x"]
@@ -16,8 +22,14 @@
 - name: calico/base image and publish
   dependencies:
     - Checks
+  # Deliberately not change-gated, and master only, which is what the promotion
+  # it replaces did. base exists to carry current UBI packages: its Dockerfile
+  # barely changes, but every rebuild picks up `microdnf upgrade`. Gating it on
+  # its own sources would republish it only when the Dockerfile moved, which is
+  # rarely. The image cache still applies, so repeated master pushes inside the
+  # cache window reuse one build rather than producing near-identical tags.
   run:
-    when: "pull_request !~ '.*' and (branch = 'master' or branch =~ '^go1\\.') and change_in(['/images/calico-base/', '/images/Makefile', '/lib.Makefile', '/Makefile.common'])"
+    when: "pull_request !~ '.*' and branch = 'master'"
   task:
     secrets:
       - name: docker
@@ -34,5 +46,13 @@
     jobs:
       - name: Build and publish calico/base multi-arch images
         commands:
-          - make -C images calico-base-image-all
+          - |
+            for arch in amd64 arm64 ppc64le s390x; do
+              if hack/image-cache.sh restore calico-base "$arch"; then
+                make -C images calico-base-retag ARCH="$arch"
+              else
+                make -C images calico-base-image ARCH="$arch"
+                hack/image-cache.sh store calico-base "$arch"
+              fi
+            done
           - make -C images calico-base-push CONFIRM=true
