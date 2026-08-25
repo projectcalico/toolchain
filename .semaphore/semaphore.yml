@@ -35,6 +35,14 @@ execution_time_limit:
 global_job_config:
   secrets:
     - name: docker-hub
+    # Built images are cached as tarballs in GCS. The service account is the
+    # one projectcalico/calico already uses; the bucket is this repo's own.
+    - name: google-service-account-for-gce
+  env_vars:
+    - name: GOOGLE_PROJECT
+      value: unique-caldron-775
+    - name: GCS_IMAGE_CACHE_BUCKET
+      value: calico-toolchain
   prologue:
     commands:
       - echo $DOCKERHUB_PASSWORD | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
@@ -43,6 +51,10 @@ global_job_config:
       # unshallow it for GIT_VERSION:=$(shell git describe --tags --dirty --always) @ Makefile.common
       - git fetch --unshallow
       - touch ~/publish.env
+      - export GOOGLE_APPLICATION_CREDENTIALS=$HOME/secrets/secret.google-service-account-key.json
+      - gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS" || true
+      - gcloud config set project ${GOOGLE_PROJECT} || true
+      - sudo apt-get install -y zstd || true
 # Block fragments live in semaphore.yml.d/blocks and are appended here in
 # filename order. The numeric prefix groups blocks by what the image is, which
 # is durable, rather than by how it currently publishes, which is not:
@@ -91,7 +103,13 @@ blocks:
       jobs:
         - name: Build and test calico/go-build image
           commands:
-            - make -C images calico-go-build-image ARCH=$ARCH
+            - |
+              if hack/image-cache.sh restore calico-go-build $ARCH; then
+                make -C images calico-go-build-retag ARCH=$ARCH
+              else
+                make -C images calico-go-build-image ARCH=$ARCH
+                hack/image-cache.sh store calico-go-build $ARCH
+              fi
             - git clone -b "${CALICO_BRANCH}" --depth 1 git@github.com:projectcalico/calico.git calico
             - cd calico
             - sed -i 's/^GO_BUILD_VER=.*$/GO_BUILD_VER=${CALICO_GO_BUILD_IMAGETAG}/' metadata.mk
@@ -120,7 +138,14 @@ blocks:
       jobs:
         - name: Build, test and publish calico/go-build image
           commands:
-            - make -C images calico-go-build-image ARCH=$ARCH
+            # A merge normally finds the image its pull request already built.
+            - |
+              if hack/image-cache.sh restore calico-go-build $ARCH; then
+                make -C images calico-go-build-retag ARCH=$ARCH
+              else
+                make -C images calico-go-build-image ARCH=$ARCH
+                hack/image-cache.sh store calico-go-build $ARCH
+              fi
             - git clone -b "${CALICO_BRANCH}" --depth 1 git@github.com:projectcalico/calico.git calico
             - sed -i 's/^GO_BUILD_VER=.*$/GO_BUILD_VER=${CALICO_GO_BUILD_IMAGETAG}/' calico/metadata.mk
             - if [ "${ARCH}" == "amd64" ]; then ( cd calico/felix && make ut ); fi

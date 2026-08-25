@@ -1,6 +1,14 @@
 global_job_config:
   secrets:
     - name: docker-hub
+    # Built images are cached as tarballs in GCS. The service account is the
+    # one projectcalico/calico already uses; the bucket is this repo's own.
+    - name: google-service-account-for-gce
+  env_vars:
+    - name: GOOGLE_PROJECT
+      value: unique-caldron-775
+    - name: GCS_IMAGE_CACHE_BUCKET
+      value: calico-toolchain
   prologue:
     commands:
       - echo $DOCKERHUB_PASSWORD | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
@@ -9,3 +17,7 @@ global_job_config:
       # unshallow it for GIT_VERSION:=$(shell git describe --tags --dirty --always) @ Makefile.common
       - git fetch --unshallow
       - touch ~/publish.env
+      - export GOOGLE_APPLICATION_CREDENTIALS=$HOME/secrets/secret.google-service-account-key.json
+      - gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS" || true
+      - gcloud config set project ${GOOGLE_PROJECT} || true
+      - sudo apt-get install -y zstd || true
