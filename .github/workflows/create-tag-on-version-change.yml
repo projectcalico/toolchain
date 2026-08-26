@@ -26,10 +26,20 @@ jobs:
       - name: Create and push new tag (if not exists)
         run: |
           tag_name=${{ steps.generate-tag-name.outputs.tag_name }}
-          count=$(git ls-remote --tags --refs origin "$tag_name*" | grep -c "refs/tags/$tag_name" || :)
-          if [ "$count" -gt 0 ] ; then
-            echo "Git tag $tag_name already exists. Using new tag $tag_name-$count."
-            tag_name="$tag_name-$count"
+          # Changes that leave every compiler version untouched reuse the version
+          # tag with a release number appended, such as <version>-1. Look up the
+          # bare tag and its numeric suffixes only. A "<version>*" glob also
+          # matches the tags of other versions that start with the same text, for
+          # example the k8s1.37.0-rc.1 tags for a k8s1.37.0 tag.
+          release=0
+          for tag in $(git ls-remote --tags --refs origin "$tag_name" "$tag_name-[0-9]*" | sed 's|.*refs/tags/||'); do
+            suffix=${tag#"$tag_name"}
+            suffix=${suffix#-}
+            release=$(( ${suffix:-0} + 1 > release ? ${suffix:-0} + 1 : release ))
+          done
+          if [ "$release" -gt 0 ] ; then
+            echo "Version $tag_name is already tagged. Using new tag $tag_name-$release."
+            tag_name="$tag_name-$release"
           fi
           git config user.name "${{ github.actor }}"
           git config user.email "${{ github.actor }}@users.noreply.github.com"
