@@ -51,15 +51,3 @@ blocks:
         - name: Linux multi-arch manifests
           commands:
             - if [ -z "${SEMAPHORE_GIT_PR_NUMBER}" ]; then make -C images push-calico-go-build-manifests CONFIRM=true; fi
-  - name: Trigger calico/go-build pin updates
-    dependencies:
-      - Publish calico/go-build multi-arch manifests
-    run:
-      when: "tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+\\.\\d\\.\\d-k8s1\\.\\d+\\.\\d+'"
-    task:
-      secrets:
-        - name: semaphore-api
-      jobs:
-        - name: Auto calico/go-build update
-          commands:
-            - if [ -z "${SEMAPHORE_GIT_PR_NUMBER}" ]; then make update-go-build-pins CONFIRM=true; fi
