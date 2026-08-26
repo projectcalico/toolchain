@@ -1,5 +1,9 @@
 ARG TARGETARCH=${TARGETARCH}
 
+# Bump to pick up a change to the Argo CI helper scripts copied in near the end.
+ARG CI_SCRIPTS_VERSION=v1
+FROM calico/ci-scripts:${CI_SCRIPTS_VERSION} AS ci-scripts
+
 FROM almalinux:9 AS builder
 
 ARG TARGETARCH
@@ -50,6 +54,7 @@ RUN set -eux; \
         pcre-devel \
         pigz \
         pkg-config \
+        sudo \
         wget \
         xz \
         zip
@@ -306,9 +311,14 @@ COPY bin/semvalidator-${TARGETARCH} /usr/local/bin/semvalidator
 # Install Argo CI helper scripts so this image can serve as the base for Argo
 # workflows, which have no pre-checkout step. Semaphore runners do their own
 # checkout and ignore these.
-COPY scripts/checkout.sh /usr/local/bin/checkout
-COPY scripts/setup-github-ssh.sh /usr/local/bin/setup-github-ssh
-COPY scripts/create-local-secret.sh /usr/local/bin/create-local-secret
+COPY --from=ci-scripts / /usr/local/bin/
+
+# Some callers use the kebab-case spellings; alias them so there is one
+# implementation rather than two that can disagree.
+RUN set -eux; \
+    cd /usr/local/bin; \
+    ln -sf setupGithubSSH setup-github-ssh; \
+    ln -sf createLocalSecret create-local-secret
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 
