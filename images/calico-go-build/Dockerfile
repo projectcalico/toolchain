@@ -311,7 +311,12 @@ COPY bin/semvalidator-${TARGETARCH} /usr/local/bin/semvalidator
 # Install Argo CI helper scripts so this image can serve as the base for Argo
 # workflows, which have no pre-checkout step. Semaphore runners do their own
 # checkout and ignore these.
-COPY --from=ci-scripts / /usr/local/bin/
+COPY --from=ci-scripts /artifact /usr/local/bin/artifact
+COPY --from=ci-scripts /changesIn /usr/local/bin/changesIn
+COPY --from=ci-scripts /checkout /usr/local/bin/checkout
+COPY --from=ci-scripts /createLocalSecret /usr/local/bin/createLocalSecret
+COPY --from=ci-scripts /logSection /usr/local/bin/logSection
+COPY --from=ci-scripts /setupGithubSSH /usr/local/bin/setupGithubSSH
 
 # Some callers use the kebab-case spellings; alias them so there is one
 # implementation rather than two that can disagree.
