@@ -17,6 +17,7 @@ jobs:
       matrix:
         branch:
           - master
+          - go1.27
           - go1.26
           - go1.25
           - go1.25-k8s1.34
