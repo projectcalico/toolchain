@@ -51,7 +51,7 @@ blocks:
       env_vars:
         # The branch to test the current go-build against
         - name: CALICO_BRANCH
-          value: master
+          value: db3e54feee1c871db6ca780231d26235fcf35e9a
       prologue:
         commands:
           - |
