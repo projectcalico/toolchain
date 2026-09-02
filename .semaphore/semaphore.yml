@@ -51,7 +51,7 @@ blocks:
       env_vars:
         # The branch to test the current go-build against
         - name: CALICO_BRANCH
-          value: master
+          value: release-v3.33
       prologue:
         commands:
           - |
@@ -65,6 +65,8 @@ blocks:
           commands:
             - make -C images calico-go-build-image ARCH=$ARCH
             - git clone -b "${CALICO_BRANCH}" --depth 1 git@github.com:projectcalico/calico.git calico
+            # Switch to the commit that is still using Go 1.26
+            - git switch --detach db3e54feee1c871db6ca780231d26235fcf35e9a
             - cd calico
             - sed -i 's/^GO_BUILD_VER=.*$/GO_BUILD_VER=${CALICO_GO_BUILD_IMAGETAG}/' metadata.mk
             - if [ "${ARCH}" == "amd64" ]; then cd felix && make ut; fi
