@@ -7,7 +7,7 @@ BINFMT_VERSION = $(shell yq -r '.tonistiigi-binfmt.version' ../images/calico-bin
 QEMU_VERSION = $(shell yq -r '.qemu.version' ../images/calico-binfmt/versions.yaml)
 
 .PHONY: build
-build: bin/binfmt-$(ARCH) bin/semvalidator-$(ARCH)
+build: bin/binfmt-$(ARCH) bin/semvalidator-$(ARCH) bin/cctools-$(ARCH)
 
 bin/binfmt-$(ARCH): binfmt/main.go
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(ARCH) \
@@ -16,6 +16,11 @@ bin/binfmt-$(ARCH): binfmt/main.go
 bin/semvalidator-$(ARCH): semvalidator/main.go
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(ARCH) \
 		go build -o bin/semvalidator-$(ARCH) -v -buildvcs=false -ldflags "-s -w" semvalidator/main.go
+
+# cctools: the single CI VM binary (createvm/deletevm/secret/runonvm subcommands).
+bin/cctools-$(ARCH): cctools/main.go
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(ARCH) \
+		go build -o bin/cctools-$(ARCH) -v -buildvcs=false -ldflags "-s -w" ./cctools
 
 .PHONY: clean
 clean:

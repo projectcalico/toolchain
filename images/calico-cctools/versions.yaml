@@ -1,0 +1,4 @@
+# cctools image version -> the image tag (calico/cctools:<version>). Bump on a
+# behaviour change to the binary; the ArgoCI kind-rig steps pin this tag.
+cctools:
+  version: v0.1

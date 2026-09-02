@@ -6,19 +6,21 @@ CALICO_BINFMT ?= binfmt
 CALICO_GO_BUILD ?= go-build
 CALICO_RUST_BUILD ?= rust-build
 CALICO_TINYGO ?= tinygo
+CALICO_CCTOOLS ?= cctools
 
 .PHONY: build
 build:
 	$(MAKE) -C ../cmd build
-	mkdir -p calico-binfmt/bin calico-go-build/bin/
+	mkdir -p calico-binfmt/bin calico-go-build/bin/ calico-cctools/bin/
 	cp ../cmd/bin/binfmt-$(ARCH) calico-binfmt/bin/binfmt-$(ARCH)
 	cp ../cmd/bin/semvalidator-$(ARCH) calico-go-build/bin/semvalidator-$(ARCH)
+	cp ../cmd/bin/cctools-$(ARCH) calico-cctools/bin/cctools-$(ARCH)
 
 .PHONY: image
-image: calico-base-image calico-binfmt-image calico-go-build-image calico-rust-build-image calico-tinygo-image
+image: calico-base-image calico-binfmt-image calico-go-build-image calico-rust-build-image calico-tinygo-image calico-cctools-image
 
 .PHONY: image-all
-image-all: calico-base-image-all calico-binfmt-image calico-go-build-image-all calico-rust-build-image-all calico-tinygo-image-all
+image-all: calico-base-image-all calico-binfmt-image calico-go-build-image-all calico-rust-build-image-all calico-tinygo-image-all calico-cctools-image
 
 ################################################################################
 # Base image for all Calico components.
@@ -102,6 +104,22 @@ calico-binfmt-image: build
 .PHONY: calico-binfmt-cd
 calico-binfmt-cd: calico-binfmt-image var-require-one-of-CONFIRM-DRYRUN
 	$(MAKE) BUILD_IMAGES=$(CALICO_BINFMT) retag-build-images-with-registries push-images-to-registries IMAGETAG=$(CALICO_BINFMT_IMAGETAG) LATEST_IMAGE_TAG=$(CALICO_BINFMT_IMAGETAG) VALIDARCHES=amd64 EXCLUDEARCH="$(EXCLUDEARCH)"
+
+################################################################################
+# Calico cctools image: the CI VM lifecycle binary for the ArgoCI kind-rig.
+################################################################################
+
+CALICO_CCTOOLS_IMAGETAG ?= $(shell yq -r '.cctools.version' calico-cctools/versions.yaml)
+
+# amd64 only, like binfmt -- the CI/CD runners and the GCE VMs are x86_64.
+.PHONY: calico-cctools-image
+calico-cctools-image: build
+	$(DOCKER_BUILD) -t $(CALICO_CCTOOLS):$(CALICO_CCTOOLS_IMAGETAG)-amd64 -f calico-cctools/Dockerfile calico-cctools/
+	$(MAKE) BUILD_IMAGES=$(CALICO_CCTOOLS) retag-build-images-with-registries VALIDARCHES=amd64 LATEST_IMAGE_TAG=$(CALICO_CCTOOLS_IMAGETAG) IMAGETAG=$(CALICO_CCTOOLS_IMAGETAG)
+
+.PHONY: calico-cctools-cd
+calico-cctools-cd: calico-cctools-image var-require-one-of-CONFIRM-DRYRUN
+	$(MAKE) BUILD_IMAGES=$(CALICO_CCTOOLS) retag-build-images-with-registries push-images-to-registries IMAGETAG=$(CALICO_CCTOOLS_IMAGETAG) LATEST_IMAGE_TAG=$(CALICO_CCTOOLS_IMAGETAG) VALIDARCHES=amd64 EXCLUDEARCH="$(EXCLUDEARCH)"
 
 ################################################################################
 # Calico rust-build image with Rust toolchain.

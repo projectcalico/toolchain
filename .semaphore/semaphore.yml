@@ -48,6 +48,11 @@ promotions:
     pipeline_file: promotions/calico-tinygo.yml
     auto_promote:
       when: "branch = 'master' AND change_in('/images/calico-tinygo/')"
+  # Publish cctools images for master when the binary source or image changed.
+  - name: Publish calico/cctools images
+    pipeline_file: promotions/calico-cctools.yml
+    auto_promote:
+      when: "branch = 'master' AND change_in(['/images/calico-cctools/', '/cmd/cctools/', '/cctools/'])"
 
 blocks:
   - name: calico/go-build image
@@ -186,3 +191,11 @@ blocks:
           matrix:
             - env_var: ARCH
               values: ["amd64", "arm64"]
+
+  - name: calico/cctools image
+    dependencies: []
+    task:
+      jobs:
+        - name: Build calico/cctools amd64 image
+          commands:
+            - make -C images calico-cctools-image ARCH=amd64

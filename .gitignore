@@ -2,3 +2,4 @@
 cmd/bin
 images/calico-binfmt/bin
 images/calico-go-build/bin
+images/calico-cctools/bin

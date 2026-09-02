@@ -1,0 +1,115 @@
+// Copyright (c) 2026 Tigera, Inc. All rights reserved.
+
+// Package createvm creates the CI GCE VM (over the compute API) from the ci-base
+// image — docker/go/kind/kubectl/gh prebaked, so no startup script — and writes
+// its zone to ZONE_OUT for the next workflow step. It does NOT wait or SSH: the
+// run step's SSH connecting is the readiness check. Runs from the cctools scratch
+// image (no gcloud, no bash). Config comes from env vars the workflow sets; the
+// compute SA is a mounted key file (COMPUTE_SA_KEY) or its env var (see ccutil).
+package createvm
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/projectcalico/go-build/cctools/ccutil"
+	"github.com/projectcalico/go-build/cctools/gce"
+)
+
+// Run executes the createvm subcommand and returns its exit code.
+func Run() int {
+	if err := run(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "createvm: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func run(ctx context.Context) error {
+	name := mustEnv("VM_NAME")
+	project := envOr("GCP_VM_PROJECT", "unique-caldron-775")
+	zoneOut := envOr("ZONE_OUT", "/tmp/vm-zone")
+	// Point ADC at the compute SA (mounted key file, or materialized from its env var).
+	if err := ccutil.SetupComputeADC(); err != nil {
+		return err
+	}
+
+	maxRun, err := time.ParseDuration(envOr("GOOGLE_VM_MAX_RUN_DURATION", "90m"))
+	if err != nil {
+		return fmt.Errorf("GOOGLE_VM_MAX_RUN_DURATION: %w", err)
+	}
+	diskGB, err := parseDiskGB(envOr("GOOGLE_VM_DISK_SIZE", "200GB"))
+	if err != nil {
+		return err
+	}
+
+	client, err := gce.New(ctx, project)
+	if err != nil {
+		return err
+	}
+
+	cfg := gce.Config{
+		Project:     project,
+		Name:        name,
+		Zones:       strings.Fields(envOr("GOOGLE_VM_ZONES", "us-central1-a us-central1-b us-central1-c us-central1-f")),
+		MachineType: envOr("GOOGLE_VM_MACHINE_TYPE", "n2-standard-16"),
+		DiskType:    envOr("GOOGLE_VM_DISK_TYPE", "pd-ssd"),
+		DiskSizeGB:  diskGB,
+		// Default to the ci-base custom image (docker/go/kind/kubectl/gh baked in,
+		// built by cloud/kind-rig/vm-image/build-image.sh), so the VM boots ready and
+		// run-kindrig.sh does no tool installs. Override for a stock-ubuntu VM.
+		ImageFamily:  envOr("GOOGLE_VM_IMAGE_FAMILY", "ci-base"),
+		ImageProject: envOr("GOOGLE_VM_IMAGE_PROJECT", "unique-caldron-775"),
+		MaxRun:       maxRun,
+		Labels: map[string]string{
+			"ci-runner":   "true",
+			"ci-project":  "kindrig",
+			"ci-workflow": envOr("CI_WORKFLOW_LABEL", "unknown"),
+		},
+	}
+
+	fmt.Printf("[createvm] creating %s (%s) in %s across %v\n", name, cfg.MachineType, project, cfg.Zones)
+	zone, err := client.Create(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(zoneOut, []byte(zone), 0o644); err != nil {
+		return fmt.Errorf("write zone to %s: %w", zoneOut, err)
+	}
+	// Create-only: readiness is the run-e2e step's job -- it retries SSH until the
+	// VM is reachable (which it must, to ship + run), so that connect IS the
+	// readiness check. The startup script (docker install) runs meanwhile.
+	fmt.Printf("[createvm] %s created in %s (zone -> %s)\n", name, zone, zoneOut)
+	return nil
+}
+
+// parseDiskGB accepts "200GB", "200G", or "200" and returns the GB count.
+func parseDiskGB(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	s = strings.TrimSuffix(strings.TrimSuffix(strings.ToUpper(s), "GB"), "G")
+	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("GOOGLE_VM_DISK_SIZE %q: want e.g. 200GB: %w", s, err)
+	}
+	return n, nil
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func mustEnv(key string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		fmt.Fprintf(os.Stderr, "createvm: %s must be set\n", key)
+		os.Exit(1)
+	}
+	return v
+}
