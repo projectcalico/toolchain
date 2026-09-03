@@ -48,6 +48,19 @@ promotions:
     pipeline_file: promotions/calico-tinygo.yml
     auto_promote:
       when: "branch = 'master' AND change_in('/images/calico-tinygo/')"
+  # Publish scratch-utils images for master when the binary source or image changed.
+  - name: Publish calico/scratch-utils images
+    pipeline_file: promotions/calico-scratch-utils.yml
+    auto_promote:
+      when: "branch = 'master' AND change_in(['/images/calico-scratch-utils/', '/cmd/scratch-utils/', '/scratch-utils/'])"
+  # Manual only (no auto_promote): trigger from the Semaphore UI to (re)build the
+  # ci-base GCE VM image. See promotions/ci-base-vm-image.yml and vm-image/.
+  - name: Build ci-base VM image
+    pipeline_file: promotions/ci-base-vm-image.yml
+  # Manual only (no auto_promote): trigger from the Semaphore UI to (re)build the
+  # go-build preload disk image. See promotions/preload-disk-image.yml and preload-disk/.
+  - name: Build go-build preload disk image
+    pipeline_file: promotions/preload-disk-image.yml
 
 blocks:
   - name: calico/go-build image
@@ -186,3 +199,23 @@ blocks:
           matrix:
             - env_var: ARCH
               values: ["amd64", "arm64"]
+
+  - name: calico/scratch-utils image
+    dependencies: []
+    task:
+      jobs:
+        - name: Build calico/scratch-utils amd64 image
+          commands:
+            - make -C images calico-scratch-utils-image ARCH=amd64
+
+  # Unit tests for the Go under scratch-utils/ and cmd/. Run in the official golang
+  # image at the version images/calico-go-build/versions.yaml pins, so the tests see
+  # the same Go the go-build image ships and the agent needs no Go of its own.
+  - name: Go unit tests
+    dependencies: []
+    task:
+      jobs:
+        - name: go test
+          commands:
+            - GO_VERSION=$(hack/generate-version-tag-name.sh -f images/calico-go-build/versions.yaml -g)
+            - docker run --rm -v "$PWD:/src" -w /src golang:${GO_VERSION} go test ./scratch-utils/... ./cmd/...

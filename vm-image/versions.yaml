@@ -1,0 +1,12 @@
+# Tools baked into the ci-base VM image that have no home in
+# images/calico-go-build/versions.yaml. Go and the prepulled calico/go-build image
+# come from THAT file instead, so the VM cannot drift from the go-build image --
+# see README.md. Everything here is pinned so two builds of the same commit
+# produce the same image; bump a version and re-run build-image.sh.
+kind:
+  version: v0.33.0
+  # The node image kind boots clusters from. Tracks calico's lib/kind
+  # DefaultNodeImage -- bump when that does.
+  node_image: kindest/node:v1.33.7@sha256:d26ef333bdb2cbe9862a0f7c3803ecc7b4303d8cea8e814b481b09949d353040
+gh:
+  version: 2.99.0
