@@ -1,0 +1,4 @@
+# scratch-utils image version -> the image tag (calico/scratch-utils:<version>). Bump on a
+# behaviour change to the binary; the ArgoCI kind-rig steps pin this tag.
+scratch-utils:
+  version: v0.1
