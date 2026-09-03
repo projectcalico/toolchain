@@ -1,0 +1,4 @@
+# Image tag (calico/scratch-utils:<version>). Bump on a behaviour change to the
+# binary; workflow steps pin this tag.
+scratch-utils:
+  version: v0.1
