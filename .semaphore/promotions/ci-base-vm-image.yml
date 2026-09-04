@@ -1,0 +1,47 @@
+version: v1.0
+name: Build ci-base VM image
+agent:
+  machine:
+    type: f1-standard-2
+    os_image: ubuntu2204
+
+execution_time_limit:
+  minutes: 30
+
+# Manual-only (no auto_promote in semaphore.yml): trigger from the Semaphore UI to
+# (re)build the ci-base GCE VM image. The work runs on a throwaway builder VM (see
+# vm-image/build-image.sh); this agent just drives gcloud. The image lives in a
+# family, so createvm always gets the newest.
+#
+# The baked toolchain is pinned: Go and calico/go-build from
+# images/calico-go-build/versions.yaml, kind/gh from vm-image/versions.yaml. Re-run
+# after bumping either.
+global_job_config:
+  env_vars:
+    - name: PROJECT
+      value: unique-caldron-775
+    - name: ZONE
+      value: us-central1-a
+    - name: FAMILY
+      value: ci-base
+  # Same secret the projectcalico/calico GCE jobs use. Needs compute instance +
+  # image create/delete in PROJECT.
+  secrets:
+    - name: google-service-account-for-gce
+  prologue:
+    commands:
+      - export GOOGLE_APPLICATION_CREDENTIALS=$HOME/secrets/secret.google-service-account-key.json
+      - gcloud auth activate-service-account --key-file=$GOOGLE_APPLICATION_CREDENTIALS
+      - gcloud config set project $PROJECT
+      - checkout
+      # build-image.sh reads the versions.yaml files with yq.
+      - which yq || (sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq)
+
+blocks:
+  - name: Build ci-base VM image
+    dependencies: []
+    task:
+      jobs:
+        - name: build-image
+          commands:
+            - bash vm-image/build-image.sh
