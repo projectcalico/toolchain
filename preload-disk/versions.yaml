@@ -1,0 +1,10 @@
+# Upstream ref for the gke-disk-image-builder that build-preload-disk.sh fetches.
+#
+# Not a Go module dependency: ai-on-gke/tools still declares the old
+# GoogleCloudPlatform/ai-on-gke path in its go.mod and the directory was deleted
+# from that repo, so `go get` reaches only an abandoned 2023 snapshot.
+#
+# A commit, not a branch: this runs on every go-build release, and `main` moving
+# would mean two releases building disks with different builder code.
+ai-on-gke:
+  ref: 462a06c810c00868514edadf8adfd149ea1d6943
