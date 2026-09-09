@@ -1,0 +1,54 @@
+version: v1.0
+name: Build go-build preload disk image
+agent:
+  machine:
+    type: f1-standard-2
+    os_image: ubuntu2204
+
+execution_time_limit:
+  minutes: 30
+
+# Manual-only (no auto_promote in semaphore.yml): trigger from the Semaphore UI to
+# (re)build the GKE secondary-boot-disk image preloading calico/go-build. The work
+# runs on a throwaway builder VM via Google's gke-disk-image-builder (see
+# preload-disk/build-preload-disk.sh); this agent drives gcloud + `go run`.
+global_job_config:
+  env_vars:
+    # The project holding the GKE clusters that consume the disk. Building it here
+    # keeps the image with its consumer and needs no cross-project IAM; a pool CAN
+    # reference an image elsewhere, but then both the cluster's compute SA and its
+    # GKE service agent need compute.imageUser -- see preload-disk/README.md.
+    - name: PROJECT
+      value: tigera-cc-dev
+    - name: ZONE
+      value: us-central1-a
+    # Daisy scratch/staging bucket the builder requires (uploads its workflow
+    # sources + streams the builder VM's serial log here); the SA needs write access.
+    # Must live in PROJECT: the builder VM writes its serial log, so a bucket
+    # elsewhere reintroduces the cross-project IAM that building here avoids.
+    - name: GCS_PATH
+      value: gs://gke-argo-disk-images-cc-dev
+  # Same secret the projectcalico/calico GCE jobs use; also feeds ADC, which
+  # gke-disk-image-builder reads. Needs compute instance/disk/image create+delete
+  # and log-bucket write in PROJECT.
+  secrets:
+    - name: google-service-account-for-gce
+  prologue:
+    commands:
+      - export GOOGLE_APPLICATION_CREDENTIALS=$HOME/secrets/secret.google-service-account-key.json
+      - gcloud auth activate-service-account --key-file=$GOOGLE_APPLICATION_CREDENTIALS
+      - gcloud config set project $PROJECT
+      # gke-disk-image-builder is `go run ./cli`; pick the Go the tool's go.mod needs.
+      - sem-version go 1.24
+      - checkout
+      # build-preload-disk.sh resolves the go-build tag from versions.yaml with yq.
+      - which yq || (sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq)
+
+blocks:
+  - name: Build preload disk image
+    dependencies: []
+    task:
+      jobs:
+        - name: build-preload-disk
+          commands:
+            - bash preload-disk/build-preload-disk.sh
