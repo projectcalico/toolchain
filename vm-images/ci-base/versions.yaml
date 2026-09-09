@@ -1,0 +1,14 @@
+# Tools with no home in images/calico-go-build/versions.yaml. Go and the prepulled
+# calico/go-build image come from THAT file, so the VM cannot drift from the
+# go-build image. Pinned so two builds of a commit match; bump and re-run
+# build-image.sh.
+kind:
+  version: v0.33.0
+  # Every k8s version the rig tests against, all pre-pulled. The first tracks
+  # calico's lib/kind DefaultNodeImage. Each adds ~1.5GB to the image, so add a
+  # version when it is actually tested, not speculatively. Digests, not tags: a
+  # tag would let the cached node image drift from the one kind asks for.
+  node_images:
+    - kindest/node:v1.33.7@sha256:d26ef333bdb2cbe9862a0f7c3803ecc7b4303d8cea8e814b481b09949d353040
+gh:
+  version: 2.99.0
