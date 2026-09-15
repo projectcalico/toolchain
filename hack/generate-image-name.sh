@@ -11,19 +11,32 @@
 # -m caps it lower: GKE allows 39 for a secondary boot disk and only enforces that
 # when a node pool attaches the image, long after it built.
 #
-#   generate-image-name.sh -p ci-base [-f versions.yaml] [-m 39]
+# A tag build is one release, so its name is the tag and it joins the release
+# family. A branch build recurs, so its name carries the commit to stay unique --
+# nothing is ever deleted to make room -- and it joins a per-branch family, which
+# moves to the newest by itself. Keeping the families apart is what stops a master
+# build becoming what the release family resolves to.
+#
+#   tag    ci-base-1-27-1-llvm21-1-8-k8s1-37-0   family ci-base
+#   master ci-base-master-9cc1214                family ci-base-master
+#
+# -F prints the family for this build instead of the name.
+#
+#   generate-image-name.sh -p ci-base [-f versions.yaml] [-m 39] [-F]
 
 set -eu
 
 prefix=""
 ver_file=""
 max_len=63
+want_family=false
 
-while getopts ":p:f:m:" opt; do
+while getopts ":p:f:m:F" opt; do
     case $opt in
     p) prefix="$OPTARG" ;;
     f) ver_file="$OPTARG" ;;
     m) max_len="$OPTARG" ;;
+    F) want_family=true ;;
     :)
         echo "option: -$OPTARG requires an argument" >&2
         exit 1
@@ -44,7 +57,9 @@ here="$(cd "$(dirname "$0")" && pwd)"
 : "${ver_file:=$here/../images/calico-go-build/versions.yaml}"
 
 # Same precedence as calico-go-build-cd's BRANCH_NAME.
+is_tag=false
 if [[ ${SEMAPHORE_GIT_REF_TYPE:-} == "tag" && -n ${SEMAPHORE_GIT_TAG_NAME:-} ]]; then
+    is_tag=true
     version="${SEMAPHORE_GIT_TAG_NAME}"
 elif [[ -n ${SEMAPHORE_GIT_WORKING_BRANCH:-} ]]; then
     version="${SEMAPHORE_GIT_WORKING_BRANCH}"
@@ -64,7 +79,27 @@ if [[ -z $version ]]; then
     exit 1
 fi
 
+if [[ $want_family == true ]]; then
+    # Releases share one family; each branch gets its own.
+    if [[ $is_tag == true ]]; then
+        echo "$prefix"
+    else
+        echo "${prefix}-${version}"
+    fi
+    exit 0
+fi
+
 name="${prefix}-${version}"
+if [[ $is_tag != true ]]; then
+    # A branch rebuilds under the same version string, so carry the commit: the
+    # name stays unique and the family pointer moves without deleting anything.
+    sha="${SEMAPHORE_GIT_SHA:-$(git -C "$here" rev-parse HEAD 2>/dev/null || true)}"
+    if [[ -z $sha ]]; then
+        echo "cannot determine the commit for a branch build; set SEMAPHORE_GIT_SHA" >&2
+        exit 1
+    fi
+    name="${name}-${sha:0:7}"
+fi
 
 if [[ ${#name} -gt $max_len ]]; then
     echo "image name is ${#name} characters, over the limit of ${max_len}: $name" >&2
