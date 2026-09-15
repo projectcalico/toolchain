@@ -14,15 +14,16 @@ global_job_config:
       value: unique-caldron-775
     - name: ZONE
       value: us-central1-a
-    - name: FAMILY
-      value: ci-base
+    # No gcloud command here may prompt: a job has no one to answer it and just
+    # hangs until the execution_time_limit.
+    - name: CLOUDSDK_CORE_DISABLE_PROMPTS
+      value: "1"
   secrets:
     - name: google-service-account-for-gce
   prologue:
     commands:
       - export GOOGLE_APPLICATION_CREDENTIALS=$HOME/secrets/secret.google-service-account-key.json
       - gcloud auth activate-service-account --key-file=$GOOGLE_APPLICATION_CREDENTIALS
-      - gcloud config set project $PROJECT
       - checkout
       # build-image.sh reads the versions.yaml files with yq.
       - which yq || (sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq)

@@ -5,17 +5,17 @@
 # provision.sh, its disk is snapshotted into FAMILY, the builder is deleted.
 # createvm boots from FAMILY, so it always gets the newest.
 #
-#   PROJECT=unique-caldron-775 FAMILY=ci-base ./vm-images/ci-base/build-image.sh
+#   PROJECT=unique-caldron-775 ./vm-images/ci-base/build-image.sh
 #
 # Needs gcloud (authed, compute instance + image create/delete) and yq. ~3-4 min.
 set -euo pipefail
 
 PROJECT="${PROJECT:-unique-caldron-775}"
 ZONE="${ZONE:-us-central1-a}"
-# Releases go to ci-base; a branch goes to ci-base-<branch>. Separate families
-# because a family resolves to its newest member and createvm asks for one: a
-# master build sharing the release family would silently become what every CI VM
-# boots from.
+# Left empty so generate-image-name.sh decides: a release goes to its own
+# per-version family, a branch to ci-base-<branch>. Pinning one here puts every
+# build in the same family, and since a family resolves to its newest member, a
+# master build would become what every CI VM boots from.
 FAMILY="${FAMILY:-}"
 BUILDER="${BUILDER:-ci-img-builder-$$}"
 HERE="$(cd "$(dirname "$0")" && pwd)"

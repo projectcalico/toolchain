@@ -16,13 +16,16 @@ global_job_config:
       value: us-central1-a
     - name: GCS_PATH
       value: gs://gke-argo-disk-images-cc-dev
+    # No gcloud command here may prompt: a job has no one to answer it and just
+    # hangs until the execution_time_limit.
+    - name: CLOUDSDK_CORE_DISABLE_PROMPTS
+      value: "1"
   secrets:
     - name: google-service-account-for-gce
   prologue:
     commands:
       - export GOOGLE_APPLICATION_CREDENTIALS=$HOME/secrets/secret.google-service-account-key.json
       - gcloud auth activate-service-account --key-file=$GOOGLE_APPLICATION_CREDENTIALS
-      - gcloud config set project $PROJECT
       # gke-disk-image-builder is `go run ./cli`; pick the Go the tool's go.mod needs.
       - sem-version go 1.24
       - checkout
