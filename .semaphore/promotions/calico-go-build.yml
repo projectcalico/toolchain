@@ -35,11 +35,11 @@ promotions:
   - name: Build ci-base VM image
     pipeline_file: ci-base-vm-image.yml
     auto_promote:
-      when: "result = 'passed' AND tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+(\\.\\d+){2}-k8s1\\.\\d+\\.\\d+'"
+      when: "result = 'passed'"
   - name: Build go-build preload disk image
     pipeline_file: preload-disk-image.yml
     auto_promote:
-      when: "result = 'passed' AND tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+(\\.\\d+){2}-k8s1\\.\\d+\\.\\d+'"
+      when: "result = 'passed'"
 
 blocks:
   - name: Publish calico/go-build images

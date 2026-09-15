@@ -30,6 +30,10 @@ ZONE="${ZONE:-us-central1-a}"
 # "ci-cache" because the full go-build tag needs the room: a release-candidate tag
 # is 34 characters on its own.
 IMAGE_NAME="${IMAGE_NAME:-$("$REPO/hack/generate-image-name.sh" -p cic -m 39)}"
+# GKE pins an exact image name and cannot follow a family, so this is not for the
+# node pool: it is so automation can resolve the newest cache disk with
+# images describe-from-family and then create a pool pinned to that name.
+IMAGE_FAMILY="${IMAGE_FAMILY:-$("$REPO/hack/generate-image-name.sh" -p ci-cache -F)}"
 DISK_SIZE_GB="${DISK_SIZE_GB:-20}"
 # Override where "default" is a legacy network with no subnets (unique-caldron-775
 # is one): the builder demands a subnetwork and fails validation without it.
@@ -69,25 +73,23 @@ args=(
   --disk-size-gb="$DISK_SIZE_GB"
   --network="$NETWORK"
   --subnet="$SUBNET"
+  --image-family-name="$IMAGE_FAMILY"
 )
 for img in $CONTAINER_IMAGES; do args+=(--container-image="$img"); done
 
 # Release images are immutable; branch images are replaced. A pool stores the image
 # PATH, not an id, so a same-name recreate leaves its config valid.
+# Unique per build, so a collision means this commit is already built. Nothing is
+# deleted here: a node pool pins an exact name, and removing one out from under a
+# live pool breaks node creation.
 if gcloud compute images describe "$IMAGE_NAME" --project="$PROJECT" >/dev/null 2>&1; then
-  if [ "${SEMAPHORE_GIT_REF_TYPE:-}" = "tag" ]; then
-    log "image $IMAGE_NAME already exists in $PROJECT -- this release is already built."
-    log "to rebuild it: gcloud compute images delete $IMAGE_NAME --project=$PROJECT"
-    log "or set IMAGE_NAME=<name> to build under a different name."
-    exit 1
-  fi
-  log "replacing existing branch image $IMAGE_NAME"
-  log "note: existing nodes keep their copy (the disk attaches at node creation)."
-  log "      Only nodes created before this build finishes miss the cache."
-  gcloud --quiet compute images delete "$IMAGE_NAME" --project="$PROJECT"
+  log "image $IMAGE_NAME already exists in $PROJECT -- nothing to rebuild."
+  log "to force it: gcloud compute images delete $IMAGE_NAME --project=$PROJECT"
+  log "or set IMAGE_NAME=<name> to build under a different name."
+  exit 1
 fi
 
-log "building disk image ${IMAGE_NAME} in ${PROJECT} (network ${NETWORK}/${SUBNET})"
+log "building disk image ${IMAGE_NAME} (family ${IMAGE_FAMILY}) in ${PROJECT} (network ${NETWORK}/${SUBNET})"
 log "preloading: ${CONTAINER_IMAGES}"
 ( cd "$workdir/tools/gke-disk-image-builder" && go run ./cli "${args[@]}" )
 

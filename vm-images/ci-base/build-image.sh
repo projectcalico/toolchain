@@ -12,7 +12,11 @@ set -euo pipefail
 
 PROJECT="${PROJECT:-unique-caldron-775}"
 ZONE="${ZONE:-us-central1-a}"
-FAMILY="${FAMILY:-ci-base}"
+# Releases go to ci-base; a branch goes to ci-base-<branch>. Separate families
+# because a family resolves to its newest member and createvm asks for one: a
+# master build sharing the release family would silently become what every CI VM
+# boots from.
+FAMILY="${FAMILY:-}"
 BUILDER="${BUILDER:-ci-img-builder-$$}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
@@ -30,22 +34,20 @@ GO_BUILD_IMAGE="${GO_BUILD_IMAGE:-calico/go-build:$("$REPO/hack/generate-version
 KUBECTL_VERSION="${KUBECTL_VERSION:-v$(yq -r '.kubernetes.version' "$VERSIONS")}"
 log "go $GO_VERSION, kubectl $KUBECTL_VERSION, prepulling $GO_BUILD_IMAGE (from images/calico-go-build/versions.yaml)"
 
-# Named off the go-build release tag, so image and toolchain match by eye.
-IMAGE="${IMAGE:-$("$REPO/hack/generate-image-name.sh" -p "$FAMILY" -f "$VERSIONS")}"
+# Named off the go-build release tag, so image and toolchain match by eye; a branch
+# build carries its commit instead, which is what keeps it unique.
+IMAGE="${IMAGE:-$("$REPO/hack/generate-image-name.sh" -p ci-base -f "$VERSIONS")}"
+FAMILY="${FAMILY:-$("$REPO/hack/generate-image-name.sh" -p ci-base -f "$VERSIONS" -F)}"
 log "image name: $IMAGE (family $FAMILY)"
 
-# Deterministic names collide on a rebuild; check now, not after four minutes of
-# builder VM. Release images are immutable, branch images are replaced -- the same
-# split calico/go-build makes between its tags.
+# Names are unique per build -- a release by its tag, a branch by its commit -- so
+# a collision means this exact thing is already built. Nothing is deleted to make
+# room; the family moves to whatever is newest.
 if gcloud compute images describe "$IMAGE" --project="$PROJECT" >/dev/null 2>&1; then
-  if [ "${SEMAPHORE_GIT_REF_TYPE:-}" = "tag" ]; then
-    log "image $IMAGE already exists in $PROJECT -- this release is already built."
-    log "to rebuild it: gcloud compute images delete $IMAGE --project=$PROJECT"
-    log "or set IMAGE=<name> to build under a different name."
-    exit 1
-  fi
-  log "replacing existing branch image $IMAGE"
-  gcloud --quiet compute images delete "$IMAGE" --project="$PROJECT"
+  log "image $IMAGE already exists in $PROJECT -- nothing to rebuild."
+  log "to force it: gcloud compute images delete $IMAGE --project=$PROJECT"
+  log "or set IMAGE=<name> to build under a different name."
+  exit 1
 fi
 
 # kind and gh have no entry in the go-build versions file. All pinned, so an image
