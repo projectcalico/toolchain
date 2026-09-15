@@ -33,6 +33,15 @@ func run(ctx context.Context) error {
 	if name == "" {
 		return fmt.Errorf("VM_NAME must be set")
 	}
+	// No default family. Families are per toolchain version now
+	// (ci-base-1-27-1-21-1-8-1-37-0), so a baked-in name goes stale at the next
+	// release -- and a stale family either stops resolving or, worse, resolves to an
+	// image from a different Go line. The caller has to say which it wants.
+	image := os.Getenv("GOOGLE_VM_IMAGE")
+	family := os.Getenv("GOOGLE_VM_IMAGE_FAMILY")
+	if image == "" && family == "" {
+		return fmt.Errorf("set GOOGLE_VM_IMAGE to an exact image, or GOOGLE_VM_IMAGE_FAMILY to a family such as ci-base-1-27-1-21-1-8-1-37-0")
+	}
 	project := util.EnvOr("GCP_VM_PROJECT", "unique-caldron-775")
 	zoneOut := util.EnvOr("ZONE_OUT", "/tmp/vm-zone")
 	// Point ADC at the compute SA (mounted key file, or materialized from its env var).

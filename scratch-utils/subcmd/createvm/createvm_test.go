@@ -70,3 +70,27 @@ func TestParseMaxRun(t *testing.T) {
 		t.Errorf("error should quote the input: %v", err)
 	}
 }
+
+// The family default used to be "ci-base". Families are now per toolchain
+// version, so any default goes stale at the next release -- and a stale family
+// either stops resolving or silently resolves to another Go line. Requiring one
+// of the two is what makes that impossible.
+func TestRequiresAnImageOrAFamily(t *testing.T) {
+	t.Setenv("VM_NAME", "vm-1")
+	t.Setenv("GOOGLE_VM_IMAGE", "")
+	t.Setenv("GOOGLE_VM_IMAGE_FAMILY", "")
+
+	err := run(t.Context())
+	if err == nil {
+		t.Fatal("want an error when neither is set")
+	}
+	for _, want := range []string{"GOOGLE_VM_IMAGE", "GOOGLE_VM_IMAGE_FAMILY"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should name %s: %v", want, err)
+		}
+	}
+	// It must fail on config, not by reaching for credentials first.
+	if strings.Contains(err.Error(), "compute SA") {
+		t.Errorf("config should be validated before auth: %v", err)
+	}
+}
