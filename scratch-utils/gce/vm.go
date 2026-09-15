@@ -220,11 +220,14 @@ type zoneInstance struct {
 	status string
 }
 
-// goingAway reports a status from which the instance will not become usable --
-// it is shutting down, already stopped, or on its way out.
+// goingAway reports a status from which the instance will not become usable -- it
+// is shutting down, already stopped, or tearing down. Every remaining value of
+// Instance.Status (PENDING, PROVISIONING, STAGING, RUNNING, REPAIRING) either is
+// usable or may still become so.
 func goingAway(status string) bool {
 	switch status {
-	case "STOPPING", "STOPPED", "SUSPENDING", "SUSPENDED", "TERMINATED":
+	case "STOPPING", "STOPPED", "SUSPENDING", "SUSPENDED", "TERMINATED",
+		"DEPROVISIONING", "PENDING_STOP":
 		return true
 	}
 	return false

@@ -187,6 +187,24 @@ func TestPickZone(t *testing.T) {
 			wantAny:     "us-central1-c",
 		},
 		{
+			// The case this whole split exists for: DEPROVISIONING is what the orphan
+			// reports while its queued DELETE finally runs. Counting it live made this
+			// ambiguous, so runonvm exited 1 with a good VM sitting right there.
+			name: "orphan tearing down, real one live",
+			found: []zoneInstance{
+				{"us-central1-a", "DEPROVISIONING"},
+				{"us-central1-b", "RUNNING"},
+			},
+			wantLive: "us-central1-b",
+			wantAny:  "us-central1-b",
+		},
+		{
+			name:        "only one gracefully shutting down",
+			found:       []zoneInstance{{"us-central1-f", "PENDING_STOP"}},
+			wantLiveErr: true,
+			wantAny:     "us-central1-f",
+		},
+		{
 			name: "two going away: nothing to run on, and ambiguous to reap",
 			found: []zoneInstance{
 				{"us-central1-a", "TERMINATED"},
@@ -241,5 +259,29 @@ func TestPickZoneErrorsAreActionable(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("unusable error should mention %q: %v", want, err)
 		}
+	}
+}
+
+// goingAway is a denylist over Instance.Status, so a value the SDK defines but
+// this switch omits silently counts as usable. Pin the whole enum.
+func TestGoingAwayCoversTheStatusEnum(t *testing.T) {
+	// google.golang.org/api/compute/v1, the Instance.Status doc comment.
+	usable := []string{"PENDING", "PROVISIONING", "STAGING", "RUNNING", "REPAIRING"}
+	dying := []string{
+		"STOPPING", "STOPPED", "SUSPENDING", "SUSPENDED", "TERMINATED",
+		"DEPROVISIONING", "PENDING_STOP",
+	}
+	for _, s := range usable {
+		if goingAway(s) {
+			t.Errorf("%s is usable or may become so, but goingAway says otherwise", s)
+		}
+	}
+	for _, s := range dying {
+		if !goingAway(s) {
+			t.Errorf("%s will never become usable, but goingAway treats it as live", s)
+		}
+	}
+	if got := len(usable) + len(dying); got != 12 {
+		t.Errorf("Instance.Status has 12 values in the pinned SDK; this test covers %d", got)
 	}
 }
