@@ -2,11 +2,12 @@
 # Copyright (c) 2026 Tigera, Inc. All rights reserved.
 #
 # Build a GKE secondary-boot-disk image with the images CI pulls most already on
-# it, so pods skip the pull. Wraps Google's gke-disk-image-builder.
+# it, so pods skip the pull. Wraps the vendored gke-disk-image-builder in
+# disk-image-builder/ -- see its README for why it is a fork and not a fetch.
 #
 #   PROJECT=tigera-cc-dev GCS_PATH=gs://<bucket> ./build-preload-disk.sh
 #
-# Needs gcloud, git, yq and a Go toolchain. ~5-8 min. Attach the result at node
+# Needs gcloud, yq and a Go toolchain. ~5-8 min. Attach the result at node
 # pool CREATE time (there is no update flag for it), with image streaming on:
 #
 #   gcloud container node-pools create <pool> --cluster=<c> --location=<l> \
@@ -47,23 +48,9 @@ if [ -z "${CONTAINER_IMAGES:-}" ]; then
   go_build_tag="$("$REPO/hack/generate-version-tag-name.sh" -f "$REPO/images/calico-go-build/versions.yaml")"
   CONTAINER_IMAGES="docker.io/calico/go-build:${go_build_tag}"
 fi
-# Pinned in versions.yaml; a branch or tag also works, for testing upstream.
-AI_ON_GKE_REF="${AI_ON_GKE_REF:-$(yq -r '.ai-on-gke.ref' "$HERE/versions.yaml")}"
+BUILDER="$HERE/disk-image-builder"
 
 log() { echo "[preload-disk] $*"; }
-
-workdir="$(mktemp -d)"
-trap 'rm -rf "$workdir"' EXIT INT TERM
-
-# Not `clone --branch`: that cannot check out a bare commit. This accepts any ref.
-log "fetching gke-disk-image-builder (ai-on-gke/tools @ ${AI_ON_GKE_REF})"
-git init -q "$workdir/tools"
-git -C "$workdir/tools" remote add origin https://github.com/ai-on-gke/tools.git
-git -C "$workdir/tools" sparse-checkout init --cone
-git -C "$workdir/tools" sparse-checkout set gke-disk-image-builder
-git -C "$workdir/tools" fetch -q --depth 1 --filter=blob:none origin "$AI_ON_GKE_REF"
-git -C "$workdir/tools" checkout -q FETCH_HEAD
-log "builder at $(git -C "$workdir/tools" rev-parse HEAD)"
 
 args=(
   --project-name="$PROJECT"
@@ -91,6 +78,8 @@ fi
 
 log "building disk image ${IMAGE_NAME} (family ${IMAGE_FAMILY}) in ${PROJECT} (network ${NETWORK}/${SUBNET})"
 log "preloading: ${CONTAINER_IMAGES}"
-( cd "$workdir/tools/gke-disk-image-builder" && go run ./cli "${args[@]}" )
+# Its own module, so building it pulls none of its ~30 dependencies into this
+# repo's go.mod.
+( cd "$BUILDER" && go run ./cli "${args[@]}" )
 
 log "done: image ${IMAGE_NAME} (project ${PROJECT}, ${#IMAGE_NAME}/39 chars)"
