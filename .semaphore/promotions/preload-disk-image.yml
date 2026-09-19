@@ -26,7 +26,7 @@ global_job_config:
     commands:
       - export GOOGLE_APPLICATION_CREDENTIALS=$HOME/secrets/secret.google-service-account-key.json
       - gcloud auth activate-service-account --key-file=$GOOGLE_APPLICATION_CREDENTIALS
-      # gke-disk-image-builder is `go run ./cli`; pick the Go the tool's go.mod needs.
+      # The vendored builder is its own module; pick a Go at or above its directive.
       - sem-version go 1.24
       - checkout
       # build-preload-disk.sh resolves the go-build tag from versions.yaml with yq.

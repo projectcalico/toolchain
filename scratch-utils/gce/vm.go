@@ -139,7 +139,7 @@ func (c *Client) instanceSpec(zone string, cfg Config) *compute.Instance {
 	// Only set it for a stock image.
 	if cfg.StartupScript != "" {
 		inst.Metadata = &compute.Metadata{Items: []*compute.MetadataItems{
-			{Key: "startup-script", Value: strPtr(cfg.StartupScript)},
+			{Key: "startup-script", Value: new(cfg.StartupScript)},
 		}}
 	}
 	if cfg.MaxRun > 0 {
@@ -308,5 +308,3 @@ func isNotFound(err error) bool {
 	var gerr *googleapi.Error
 	return errors.As(err, &gerr) && gerr.Code == http.StatusNotFound
 }
-
-func strPtr(s string) *string { return &s }

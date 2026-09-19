@@ -133,13 +133,13 @@ func (c *Client) injectKeyAndGetIP(ctx context.Context, zone, name, user, author
 	replaced := false
 	for _, it := range md.Items {
 		if it.Key == "ssh-keys" {
-			it.Value = strPtr(sshKeys)
+			it.Value = new(sshKeys)
 			replaced = true
 			break
 		}
 	}
 	if !replaced {
-		md.Items = append(md.Items, &compute.MetadataItems{Key: "ssh-keys", Value: strPtr(sshKeys)})
+		md.Items = append(md.Items, &compute.MetadataItems{Key: "ssh-keys", Value: new(sshKeys)})
 	}
 	var op *compute.Operation
 	if err := retry(ctx, "set ssh-keys metadata on "+name, func() (err error) {
