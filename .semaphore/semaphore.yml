@@ -55,6 +55,11 @@ promotions:
     pipeline_file: promotions/calico-scratch-utils.yml
     auto_promote:
       when: "branch = 'master' OR tag =~ '^scratch-utils-v'"
+  # A signing-tools-v* tag publishes the immutable :vX.Y the release tool pins.
+  - name: Publish calico/signing-tools images
+    pipeline_file: promotions/calico-signing-tools.yml
+    auto_promote:
+      when: "branch = 'master' OR tag =~ '^signing-tools-v'"
 
 blocks:
   - name: calico/go-build image
@@ -201,6 +206,16 @@ blocks:
         - name: Build calico/scratch-utils amd64 image
           commands:
             - make -C images calico-scratch-utils-image ARCH=amd64
+
+  - name: calico/signing-tools image
+    dependencies: []
+    task:
+      jobs:
+        - name: Build calico/signing-tools amd64 image
+          commands:
+            - make -C images calico-signing-tools-image ARCH=amd64
+            - docker run --rm signing-tools:$(yq -r '.signing-tools.version' images/calico-signing-tools/versions.yaml)-amd64 cosign version
+            - docker run --rm signing-tools:$(yq -r '.signing-tools.version' images/calico-signing-tools/versions.yaml)-amd64 syft version
 
   # Run in the golang image at the version versions.yaml pins, so the tests see the
   # same Go the go-build image ships and the agent needs none of its own.

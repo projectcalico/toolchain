@@ -1,7 +1,7 @@
-name: Create new Git tag on scratch-utils version change
+name: Create new Git tag on image version change
 
 on:
-  # Tag a scratch-utils release when its version lands on master. The publish
+  # Tag an image release when its version lands on master. The publish
   # promotion fires on that tag, so an image tag cannot be republished with new
   # contents -- doing so needs a new version here, which makes a new tag.
   push:
@@ -9,12 +9,16 @@ on:
       - master
     paths:
       - images/calico-scratch-utils/versions.yaml
+      - images/calico-signing-tools/versions.yaml
 
 jobs:
   create-tag:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    strategy:
+      matrix:
+        image: [scratch-utils, signing-tools]
 
     steps:
       - name: Checkout repository
@@ -23,14 +27,15 @@ jobs:
       - name: Generate tag name
         id: generate-tag-name
         run: |
-          version=$(yq -r '.scratch-utils.version' images/calico-scratch-utils/versions.yaml)
+          image=${{ matrix.image }}
+          version=$(yq -r ".${image}.version" images/calico-${image}/versions.yaml)
           if [ -z "$version" ] || [ "$version" = "null" ]; then
-            echo "scratch-utils.version is empty" >&2
+            echo "${image}.version is empty" >&2
             exit 1
           fi
           # Prefixed: this repo's release tags live in the same namespace as
-          # 1.27.1-llvm21.1.8-k8s1.37.0, and a second binary here would need its own.
-          tag_name="scratch-utils-${version}"
+          # 1.27.1-llvm21.1.8-k8s1.37.0, and each image here needs its own.
+          tag_name="${image}-${version}"
           echo "Git tag name: $tag_name"
           echo "tag_name=$tag_name" >> $GITHUB_OUTPUT
 

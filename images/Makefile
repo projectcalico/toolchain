@@ -7,6 +7,7 @@ CALICO_GO_BUILD ?= go-build
 CALICO_RUST_BUILD ?= rust-build
 CALICO_TINYGO ?= tinygo
 CALICO_SCRATCH_UTILS ?= scratch-utils
+CALICO_SIGNING_TOOLS ?= signing-tools
 
 .PHONY: build
 build:
@@ -24,10 +25,10 @@ scratch-utils-build:
 	cp ../cmd/bin/scratch-utils-$(ARCH) calico-scratch-utils/bin/scratch-utils-$(ARCH)
 
 .PHONY: image
-image: calico-base-image calico-binfmt-image calico-go-build-image calico-rust-build-image calico-tinygo-image calico-scratch-utils-image
+image: calico-base-image calico-binfmt-image calico-go-build-image calico-rust-build-image calico-tinygo-image calico-scratch-utils-image calico-signing-tools-image
 
 .PHONY: image-all
-image-all: calico-base-image-all calico-binfmt-image calico-go-build-image-all calico-rust-build-image-all calico-tinygo-image-all calico-scratch-utils-image
+image-all: calico-base-image-all calico-binfmt-image calico-go-build-image-all calico-rust-build-image-all calico-tinygo-image-all calico-scratch-utils-image calico-signing-tools-image
 
 ################################################################################
 # Base image for all Calico components.
@@ -132,6 +133,31 @@ calico-scratch-utils-cd: calico-scratch-utils-image var-require-one-of-CONFIRM-D
 	$(MAKE) BUILD_IMAGES=$(CALICO_SCRATCH_UTILS) retag-build-images-with-registries push-images-to-registries IMAGETAG=$(BRANCH_NAME) LATEST_IMAGE_TAG=$(CALICO_SCRATCH_UTILS_IMAGETAG) VALIDARCHES=amd64 EXCLUDEARCH="$(EXCLUDEARCH)"
 ifeq ($(BRANCH_NAME),master)
 	$(MAKE) BUILD_IMAGES=$(CALICO_SCRATCH_UTILS) retag-build-images-with-registries push-images-to-registries IMAGETAG=latest LATEST_IMAGE_TAG=$(CALICO_SCRATCH_UTILS_IMAGETAG) VALIDARCHES=amd64 EXCLUDEARCH="$(EXCLUDEARCH)"
+endif
+
+################################################################################
+# Calico signing-tools image: pinned cosign and syft for release signing.
+################################################################################
+
+SIGNING_TOOLS_VERSIONS := calico-signing-tools/versions.yaml
+CALICO_SIGNING_TOOLS_IMAGETAG ?= $(shell yq -r '.signing-tools.version' $(SIGNING_TOOLS_VERSIONS))
+
+# amd64 only, like scratch-utils: the release runners are x86_64.
+.PHONY: calico-signing-tools-image
+calico-signing-tools-image:
+	$(DOCKER_BUILD) \
+		--build-arg COSIGN_VERSION=$(shell yq -r '.cosign.version' $(SIGNING_TOOLS_VERSIONS)) \
+		--build-arg COSIGN_SHA256=$(shell yq -r '.cosign.checksum.sha256.amd64' $(SIGNING_TOOLS_VERSIONS)) \
+		--build-arg SYFT_VERSION=$(shell yq -r '.syft.version' $(SIGNING_TOOLS_VERSIONS)) \
+		--build-arg SYFT_SHA256=$(shell yq -r '.syft.checksum.sha256.amd64' $(SIGNING_TOOLS_VERSIONS)) \
+		-t $(CALICO_SIGNING_TOOLS):$(CALICO_SIGNING_TOOLS_IMAGETAG)-amd64 -f calico-signing-tools/Dockerfile calico-signing-tools/
+	$(MAKE) BUILD_IMAGES=$(CALICO_SIGNING_TOOLS) retag-build-images-with-registries VALIDARCHES=amd64 LATEST_IMAGE_TAG=$(CALICO_SIGNING_TOOLS_IMAGETAG) IMAGETAG=$(CALICO_SIGNING_TOOLS_IMAGETAG)
+
+.PHONY: calico-signing-tools-cd
+calico-signing-tools-cd: calico-signing-tools-image var-require-one-of-CONFIRM-DRYRUN var-require-all-BRANCH_NAME
+	$(MAKE) BUILD_IMAGES=$(CALICO_SIGNING_TOOLS) retag-build-images-with-registries push-images-to-registries IMAGETAG=$(BRANCH_NAME) LATEST_IMAGE_TAG=$(CALICO_SIGNING_TOOLS_IMAGETAG) VALIDARCHES=amd64 EXCLUDEARCH="$(EXCLUDEARCH)"
+ifeq ($(BRANCH_NAME),master)
+	$(MAKE) BUILD_IMAGES=$(CALICO_SIGNING_TOOLS) retag-build-images-with-registries push-images-to-registries IMAGETAG=latest LATEST_IMAGE_TAG=$(CALICO_SIGNING_TOOLS_IMAGETAG) VALIDARCHES=amd64 EXCLUDEARCH="$(EXCLUDEARCH)"
 endif
 
 ################################################################################
