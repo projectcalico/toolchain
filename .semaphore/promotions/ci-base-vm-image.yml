@@ -1,0 +1,40 @@
+version: v1.0
+name: Build ci-base VM image
+agent:
+  machine:
+    type: f1-standard-2
+    os_image: ubuntu2204
+
+execution_time_limit:
+  minutes: 30
+
+global_job_config:
+  env_vars:
+    - name: PROJECT
+      value: unique-caldron-775
+    - name: ZONE
+      value: us-central1-a
+    # No gcloud command here may prompt: a job has no one to answer it and just
+    # hangs until the execution_time_limit.
+    - name: CLOUDSDK_CORE_DISABLE_PROMPTS
+      value: "1"
+  secrets:
+    - name: google-service-account-for-gce
+  prologue:
+    commands:
+      - export GOOGLE_APPLICATION_CREDENTIALS=$HOME/secrets/secret.google-service-account-key.json
+      - gcloud auth activate-service-account --key-file=$GOOGLE_APPLICATION_CREDENTIALS
+      - checkout
+      # build-image.sh reads the versions.yaml files with yq.
+      - which yq || (sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq)
+
+blocks:
+  - name: Build ci-base VM image
+    dependencies: []
+    run:
+      when: "branch = 'master' OR tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+(\\.\\d+){2}-k8s1\\.\\d+\\.\\d+'"
+    task:
+      jobs:
+        - name: build-image
+          commands:
+            - bash vm-images/ci-base/build-image.sh

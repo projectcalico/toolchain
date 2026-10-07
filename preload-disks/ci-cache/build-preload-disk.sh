@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Copyright (c) 2026 Tigera, Inc. All rights reserved.
+#
+# Build a GKE secondary-boot-disk image with the images CI pulls most already on
+# it, so pods skip the pull. Wraps the vendored gke-disk-image-builder in
+# disk-image-builder/ -- see its README for why it is a fork and not a fetch.
+#
+#   PROJECT=tigera-cc-dev GCS_PATH=gs://<bucket> ./build-preload-disk.sh
+#
+# Needs gcloud, yq and a Go toolchain. ~5-8 min. Attach the result at node
+# pool CREATE time (there is no update flag for it), with image streaming on:
+#
+#   gcloud container node-pools create <pool> --cluster=<c> --location=<l> \
+#     --enable-image-streaming \
+#     --secondary-boot-disk=disk-image=projects/$PROJECT/global/images/<IMAGE>,mode=CONTAINER_IMAGE_CACHE
+#
+# A cluster in another project needs roles/compute.imageUser on this one for BOTH
+# its default compute SA and its service-<num>@container-engine-robot SA. Missing
+# either fails NODE creation, not pool creation, so it surfaces far from the cause.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$HERE/../.." && pwd)"
+command -v yq >/dev/null || { echo "yq is required to read the pinned versions" >&2; exit 1; }
+
+# The clusters' own project: cross-project works but needs the IAM noted above.
+PROJECT="${PROJECT:-tigera-cc-dev}"
+ZONE="${ZONE:-us-central1-a}"
+# A node pool pins this exact name. GKE caps it at 39 chars (GCE allows 63) and
+# only enforces that on attach, so -m fails here instead. "cic" rather than
+# "ci-cache" because the full go-build tag needs the room: a release-candidate tag
+# is 34 characters on its own.
+IMAGE_NAME="${IMAGE_NAME:-$("$REPO/hack/generate-image-name.sh" -p cic -m 39)}"
+# GKE pins an exact image name and cannot follow a family, so this is not for the
+# node pool: it is so automation can resolve the newest cache disk with
+# images describe-from-family and then create a pool pinned to that name.
+IMAGE_FAMILY="${IMAGE_FAMILY:-$("$REPO/hack/generate-image-name.sh" -p ci-cache -F)}"
+DISK_SIZE_GB="${DISK_SIZE_GB:-20}"
+# Override where "default" is a legacy network with no subnets (unique-caldron-775
+# is one): the builder demands a subnetwork and fails validation without it.
+NETWORK="${NETWORK:-default}"
+SUBNET="${SUBNET:-default}"
+GCS_PATH="${GCS_PATH:?set GCS_PATH to a gs:// bucket/path for the builder logs}"
+# Space-separated, each with a tag or digest: the cache hits only the exact ref a
+# pod requests, so a floating tag caches nothing. Add anything CI pulls often; the
+# default is this repo's go-build image, resolved so it cannot drift.
+if [ -z "${CONTAINER_IMAGES:-}" ]; then
+  go_build_tag="$("$REPO/hack/generate-version-tag-name.sh" -f "$REPO/images/calico-go-build/versions.yaml")"
+  CONTAINER_IMAGES="docker.io/calico/go-build:${go_build_tag}"
+fi
+BUILDER="$HERE/disk-image-builder"
+
+log() { echo "[preload-disk] $*"; }
+
+args=(
+  --project-name="$PROJECT"
+  --image-name="$IMAGE_NAME"
+  --zone="$ZONE"
+  --gcs-path="$GCS_PATH"
+  --disk-size-gb="$DISK_SIZE_GB"
+  --network="$NETWORK"
+  --subnet="$SUBNET"
+  --image-family-name="$IMAGE_FAMILY"
+)
+for img in $CONTAINER_IMAGES; do args+=(--container-image="$img"); done
+
+# Release images are immutable; branch images are replaced. A pool stores the image
+# PATH, not an id, so a same-name recreate leaves its config valid.
+# Unique per build, so a collision means this commit is already built. Nothing is
+# deleted here: a node pool pins an exact name, and removing one out from under a
+# live pool breaks node creation.
+if gcloud compute images describe "$IMAGE_NAME" --project="$PROJECT" >/dev/null 2>&1; then
+  log "image $IMAGE_NAME already exists in $PROJECT -- nothing to rebuild."
+  log "to force it: gcloud compute images delete $IMAGE_NAME --project=$PROJECT"
+  log "or set IMAGE_NAME=<name> to build under a different name."
+  exit 1
+fi
+
+log "building disk image ${IMAGE_NAME} (family ${IMAGE_FAMILY}) in ${PROJECT} (network ${NETWORK}/${SUBNET})"
+log "preloading: ${CONTAINER_IMAGES}"
+# Its own module, so building it pulls none of its ~30 dependencies into this
+# repo's go.mod.
+( cd "$BUILDER" && go run ./cli "${args[@]}" )
+
+log "done: image ${IMAGE_NAME} (project ${PROJECT}, ${#IMAGE_NAME}/39 chars)"
