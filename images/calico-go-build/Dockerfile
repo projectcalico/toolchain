@@ -199,7 +199,10 @@ RUN set -eux; \
     go install github.com/onsi/ginkgo/v2/ginkgo@v2.28.1 && mv /go/bin/ginkgo /go/bin/ginkgo2 && \
     go install github.com/onsi/ginkgo/ginkgo@v1.16.5 && \
     go install github.com/jstemmer/go-junit-report@v1.0.0 && \
-    go install github.com/wadey/gocovmerge@v0.0.0-20160331181800-b5bfa59ec0ad && \
+    # gocovmerge has no go.mod, so pin x/tools or go install resolves it to latest, which may need a newer Go.
+    mkdir /tmp/gocovmerge && cd /tmp/gocovmerge && go mod init gocovmerge && \
+    go get github.com/wadey/gocovmerge@v0.0.0-20160331181800-b5bfa59ec0ad golang.org/x/tools@v0.41.0 && \
+    go install github.com/wadey/gocovmerge && cd / && rm -rf /tmp/gocovmerge && \
     go install golang.org/x/tools/cmd/goimports@v0.41.0 && \
     go install golang.org/x/tools/cmd/stringer@v0.41.0 && \
     go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.0 && \
