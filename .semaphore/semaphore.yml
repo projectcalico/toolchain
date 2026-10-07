@@ -29,15 +29,15 @@ promotions:
   - name: Publish calico/base images
     pipeline_file: promotions/calico-base.yml
     auto_promote:
-      when: "branch = 'master' OR tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+\\.\\d\\.\\d-k8s1\\.\\d+\\.\\d+'"
+      when: "branch = 'master' OR tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+(\\.\\d+){2}-k8s1\\.\\d+\\.\\d+'"
   - name: Publish calico/binfmt images
     pipeline_file: promotions/calico-binfmt.yml
     auto_promote:
-      when: "branch = 'master' OR tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+\\.\\d\\.\\d-k8s1\\.\\d+\\.\\d+'"
+      when: "branch = 'master' OR tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+(\\.\\d+){2}-k8s1\\.\\d+\\.\\d+'"
   - name: Publish calico/go-build images
     pipeline_file: promotions/calico-go-build.yml
     auto_promote:
-      when: "branch = 'master' OR tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+\\.\\d\\.\\d-k8s1\\.\\d+\\.\\d+'"
+      when: "branch = 'master' OR tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+(\\.\\d+){2}-k8s1\\.\\d+\\.\\d+'"
   # Publish rust-build images for master and files under images/calico-rust-build have changed.
   - name: Publish calico/rust-build images
     pipeline_file: promotions/calico-rust-build.yml
@@ -48,6 +48,13 @@ promotions:
     pipeline_file: promotions/calico-tinygo.yml
     auto_promote:
       when: "branch = 'master' AND change_in('/images/calico-tinygo/')"
+  # master publishes a moving :master, so any change ships -- including a bare
+  # go.mod bump, which no change_in path would have caught. A scratch-utils-v* tag
+  # publishes the immutable :vX.Y that workflows pin.
+  - name: Publish calico/scratch-utils images
+    pipeline_file: promotions/calico-scratch-utils.yml
+    auto_promote:
+      when: "branch = 'master' OR tag =~ '^scratch-utils-v'"
 
 blocks:
   - name: calico/go-build image
@@ -186,3 +193,22 @@ blocks:
           matrix:
             - env_var: ARCH
               values: ["amd64", "arm64"]
+
+  - name: calico/scratch-utils image
+    dependencies: []
+    task:
+      jobs:
+        - name: Build calico/scratch-utils amd64 image
+          commands:
+            - make -C images calico-scratch-utils-image ARCH=amd64
+
+  # Run in the golang image at the version versions.yaml pins, so the tests see the
+  # same Go the go-build image ships and the agent needs none of its own.
+  - name: Go unit tests
+    dependencies: []
+    task:
+      jobs:
+        - name: go test
+          commands:
+            - GO_VERSION=$(hack/generate-version-tag-name.sh -f images/calico-go-build/versions.yaml -g)
+            - docker run --rm -v "$PWD:/src" -w /src golang:${GO_VERSION} go test ./scratch-utils/... ./cmd/...
