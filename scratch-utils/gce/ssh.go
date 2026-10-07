@@ -2,8 +2,9 @@
 
 // SSH access to a GCE VM without gcloud: an ephemeral keypair goes in as the
 // instance's `ssh-keys` metadata (the guest agent installs it), the external IP
-// comes from the instance, and the connection is a plain x/crypto/ssh dial. This
-// is what lets the run step drive the VM from the same distroless image.
+// and the host keys come from the instance, and the connection is an
+// x/crypto/ssh dial pinned to those keys. This is what lets the run step drive
+// the VM from the same scratch image.
 package gce
 
 import (
@@ -33,11 +34,10 @@ type SSH struct {
 	client *ssh.Client
 }
 
-// DialSSH injects an ephemeral keypair, reads the external IP and dials, retrying
-// until reachable -- a fresh VM accepts SSH only once sshd, the guest agent and
-// the key have caught up. This retry is the readiness check createvm skips. The
-// host key is not verified: we just made the VM, it lives for minutes, and there
-// is no prior key to pin.
+// DialSSH injects an ephemeral keypair, reads the external IP and the VM's own
+// host keys, then dials pinned to them, retrying until reachable -- a fresh VM
+// accepts SSH only once sshd, the guest agent and the key have caught up. This
+// retry is the readiness check createvm skips.
 func (c *Client) DialSSH(ctx context.Context, zone, name, user string) (*SSH, error) {
 	signer, authorized, err := ephemeralKey()
 	if err != nil {
@@ -49,10 +49,12 @@ func (c *Client) DialSSH(ctx context.Context, zone, name, user string) (*SSH, er
 	}
 
 	cfg := &ssh.ClientConfig{
-		User:            user,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // ephemeral CI VM, no key to pin
-		Timeout:         10 * time.Second,
+		User:    user,
+		Auth:    []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		Timeout: 10 * time.Second,
+	}
+	if err := c.pinHostKeys(ctx, zone, name, cfg); err != nil {
+		return nil, err
 	}
 	addr := net.JoinHostPort(ip, "22")
 
@@ -180,6 +182,96 @@ func externalIP(inst *compute.Instance) string {
 		}
 	}
 	return ""
+}
+
+// insecureHostKeyEnv restores the old unverified behaviour. Only here for the
+// rollout: a VM created before createvm started enabling guest attributes has no
+// published key to pin, so a job that outlives the upgrade would otherwise fail.
+// Remove it once nothing is running on an older image.
+const insecureHostKeyEnv = "VM_SSH_INSECURE_HOST_KEY"
+
+// pinHostKeys makes cfg accept only a host key this instance published, so a
+// machine-in-the-middle on the path to the VM's external IP cannot impersonate it
+// and collect what runonvm ships -- which includes the secrets --put-env writes.
+func (c *Client) pinHostKeys(ctx context.Context, zone, name string, cfg *ssh.ClientConfig) error {
+	if os.Getenv(insecureHostKeyEnv) == "true" {
+		fmt.Fprintf(os.Stderr, "[gce] WARNING: %s=true, not verifying the host key of %s\n", insecureHostKeyEnv, name)
+		cfg.HostKeyCallback = ssh.InsecureIgnoreHostKey() //nolint:gosec // deliberate opt-out, see insecureHostKeyEnv
+		return nil
+	}
+	keys, err := c.hostKeys(ctx, zone, name)
+	if err != nil {
+		return fmt.Errorf("%w (set %s=true to connect without verifying it)", err, insecureHostKeyEnv)
+	}
+	// Host key algorithms are left alone: RFC 8332 keeps the public key blob
+	// identical under rsa-sha2-*, changing only the signature algorithm, so a
+	// negotiated algorithm this list did not predict still compares equal.
+	cfg.HostKeyCallback = acceptOneOf(keys)
+	return nil
+}
+
+// acceptOneOf accepts any of keys, compared by marshalled bytes. A VM publishes
+// one key per algorithm and the handshake picks among them, so pinning a single
+// key (ssh.FixedHostKey) would reject a legitimate choice.
+func acceptOneOf(keys []ssh.PublicKey) ssh.HostKeyCallback {
+	want := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		want[string(k.Marshal())] = struct{}{}
+	}
+	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
+		if _, ok := want[string(key.Marshal())]; ok {
+			return nil
+		}
+		return fmt.Errorf("host key %s is not one of the %d this instance published",
+			ssh.FingerprintSHA256(key), len(want))
+	}
+}
+
+// hostKeys reads the instance's SSH host keys from its guest attributes. Read
+// through the compute API rather than off the wire: that is an authenticated TLS
+// channel, which is the whole reason pinning to the result means anything.
+//
+// The guest agent writes them after boot, so this is not available the moment the
+// insert reaches DONE -- absent counts as not-ready and is retried.
+func (c *Client) hostKeys(ctx context.Context, zone, name string) ([]ssh.PublicKey, error) {
+	var keys []ssh.PublicKey
+	err := retry(ctx, "host keys of "+name, func() error {
+		ga, err := c.svc.Instances.GetGuestAttributes(c.project, zone, name).
+			QueryPath("hostkeys/").Context(ctx).Do()
+		if err != nil {
+			// 404 while the namespace does not exist yet, which is the normal state
+			// for the first few seconds of a VM's life.
+			if isNotFound(err) {
+				return fmt.Errorf("%s has published no host keys yet: %w", name, errNotReady)
+			}
+			return err
+		}
+		keys = nil
+		if ga.QueryValue == nil {
+			return fmt.Errorf("%s has published no host keys yet: %w", name, errNotReady)
+		}
+		for _, it := range ga.QueryValue.Items {
+			// Key is the algorithm and Value the bare base64 blob -- an
+			// authorized_keys line with the type split off, so join them back up
+			// and let the library parse it.
+			pub, _, _, _, perr := ssh.ParseAuthorizedKey([]byte(it.Key + " " + it.Value))
+			if perr != nil {
+				// One unreadable entry is no reason to refuse the others; failing
+				// here would turn a new key type into an outage.
+				fmt.Fprintf(os.Stderr, "[gce] ignoring unparseable host key %q on %s: %v\n", it.Key, name, perr)
+				continue
+			}
+			keys = append(keys, pub)
+		}
+		if len(keys) == 0 {
+			return fmt.Errorf("%s has published no usable host keys: %w", name, errNotReady)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return keys, nil
 }
 
 // ephemeralKey returns an ssh signer and its authorized_keys line.
