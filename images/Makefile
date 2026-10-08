@@ -6,6 +6,7 @@ CALICO_BINFMT ?= binfmt
 CALICO_GO_BUILD ?= go-build
 CALICO_RUST_BUILD ?= rust-build
 CALICO_TINYGO ?= tinygo
+CALICO_SCRATCH_UTILS ?= scratch-utils
 
 .PHONY: build
 build:
@@ -14,11 +15,19 @@ build:
 	cp ../cmd/bin/binfmt-$(ARCH) calico-binfmt/bin/binfmt-$(ARCH)
 	cp ../cmd/bin/semvalidator-$(ARCH) calico-go-build/bin/semvalidator-$(ARCH)
 
+# Separate so the go-build and binfmt images do not compile the GCP SDK to build
+# a binary they never contain.
+.PHONY: scratch-utils-build
+scratch-utils-build:
+	$(MAKE) -C ../cmd scratch-utils-build
+	mkdir -p calico-scratch-utils/bin/
+	cp ../cmd/bin/scratch-utils-$(ARCH) calico-scratch-utils/bin/scratch-utils-$(ARCH)
+
 .PHONY: image
-image: calico-base-image calico-binfmt-image calico-go-build-image calico-rust-build-image calico-tinygo-image
+image: calico-base-image calico-binfmt-image calico-go-build-image calico-rust-build-image calico-tinygo-image calico-scratch-utils-image
 
 .PHONY: image-all
-image-all: calico-base-image-all calico-binfmt-image calico-go-build-image-all calico-rust-build-image-all calico-tinygo-image-all
+image-all: calico-base-image-all calico-binfmt-image calico-go-build-image-all calico-rust-build-image-all calico-tinygo-image-all calico-scratch-utils-image
 
 ################################################################################
 # Base image for all Calico components.
@@ -102,6 +111,28 @@ calico-binfmt-image: build
 .PHONY: calico-binfmt-cd
 calico-binfmt-cd: calico-binfmt-image var-require-one-of-CONFIRM-DRYRUN
 	$(MAKE) BUILD_IMAGES=$(CALICO_BINFMT) retag-build-images-with-registries push-images-to-registries IMAGETAG=$(CALICO_BINFMT_IMAGETAG) LATEST_IMAGE_TAG=$(CALICO_BINFMT_IMAGETAG) VALIDARCHES=amd64 EXCLUDEARCH="$(EXCLUDEARCH)"
+
+################################################################################
+# Calico scratch-utils image: the CI VM lifecycle binary.
+################################################################################
+
+CALICO_SCRATCH_UTILS_IMAGETAG ?= $(shell yq -r '.scratch-utils.version' calico-scratch-utils/versions.yaml)
+
+# amd64 only, like binfmt: the runners and the GCE VMs are x86_64.
+.PHONY: calico-scratch-utils-image
+calico-scratch-utils-image: scratch-utils-build
+	$(DOCKER_BUILD) -t $(CALICO_SCRATCH_UTILS):$(CALICO_SCRATCH_UTILS_IMAGETAG)-amd64 -f calico-scratch-utils/Dockerfile calico-scratch-utils/
+	$(MAKE) BUILD_IMAGES=$(CALICO_SCRATCH_UTILS) retag-build-images-with-registries VALIDARCHES=amd64 LATEST_IMAGE_TAG=$(CALICO_SCRATCH_UTILS_IMAGETAG) IMAGETAG=$(CALICO_SCRATCH_UTILS_IMAGETAG)
+
+# IMAGETAG is the pushed tag, LATEST_IMAGE_TAG the local one built above. A tag
+# build pushes the immutable :vX.Y (BRANCH_NAME is the stripped git tag); master
+# pushes the moving :master and :latest.
+.PHONY: calico-scratch-utils-cd
+calico-scratch-utils-cd: calico-scratch-utils-image var-require-one-of-CONFIRM-DRYRUN var-require-all-BRANCH_NAME
+	$(MAKE) BUILD_IMAGES=$(CALICO_SCRATCH_UTILS) retag-build-images-with-registries push-images-to-registries IMAGETAG=$(BRANCH_NAME) LATEST_IMAGE_TAG=$(CALICO_SCRATCH_UTILS_IMAGETAG) VALIDARCHES=amd64 EXCLUDEARCH="$(EXCLUDEARCH)"
+ifeq ($(BRANCH_NAME),master)
+	$(MAKE) BUILD_IMAGES=$(CALICO_SCRATCH_UTILS) retag-build-images-with-registries push-images-to-registries IMAGETAG=latest LATEST_IMAGE_TAG=$(CALICO_SCRATCH_UTILS_IMAGETAG) VALIDARCHES=amd64 EXCLUDEARCH="$(EXCLUDEARCH)"
+endif
 
 ################################################################################
 # Calico rust-build image with Rust toolchain.
