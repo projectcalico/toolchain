@@ -23,7 +23,7 @@ blocks:
   - name: Publish calico/base multi-arch images
     dependencies: []
     run:
-      when: "branch = 'master' OR tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+\\.\\d\\.\\d-k8s1\\.\\d+\\.\\d+'"
+      when: "branch = 'master' OR tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+(\\.\\d+){2}-k8s1\\.\\d+\\.\\d+'"
     task:
       env_vars:
         - name: BRANCH_NAME

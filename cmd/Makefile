@@ -9,6 +9,9 @@ QEMU_VERSION = $(shell yq -r '.qemu.version' ../images/calico-binfmt/versions.ya
 .PHONY: build
 build: bin/binfmt-$(ARCH) bin/semvalidator-$(ARCH)
 
+.PHONY: scratch-utils-build
+scratch-utils-build: bin/scratch-utils-$(ARCH)
+
 bin/binfmt-$(ARCH): binfmt/main.go
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(ARCH) \
 		go build -o bin/binfmt-$(ARCH) -v -buildvcs=false -ldflags "-X main.revision=$(BINFMT_VERSION) -X main.qemuVersion=$(QEMU_VERSION) -s -w" binfmt/*.go
@@ -16,6 +19,15 @@ bin/binfmt-$(ARCH): binfmt/main.go
 bin/semvalidator-$(ARCH): semvalidator/main.go
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(ARCH) \
 		go build -o bin/semvalidator-$(ARCH) -v -buildvcs=false -ldflags "-s -w" semvalidator/main.go
+
+# Unlike the single-file binaries above, this one spans ../scratch-utils/, so list
+# every .go file it compiles -- otherwise an incremental build ships a stale binary.
+# := so the find runs once, not on every expansion of the prerequisite list.
+SCRATCH_UTILS_SRCS := $(shell find scratch-utils ../scratch-utils -name '*.go')
+
+bin/scratch-utils-$(ARCH): $(SCRATCH_UTILS_SRCS)
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(ARCH) \
+		go build -o bin/scratch-utils-$(ARCH) -v -buildvcs=false -ldflags "-s -w" ./scratch-utils
 
 .PHONY: clean
 clean:
