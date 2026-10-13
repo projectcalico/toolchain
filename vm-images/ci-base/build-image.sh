@@ -29,10 +29,13 @@ VERSIONS="$REPO/images/calico-go-build/versions.yaml"
 command -v yq >/dev/null || { echo "yq is required to read $VERSIONS" >&2; exit 1; }
 GO_VERSION="${GO_VERSION:-$("$REPO/hack/generate-version-tag-name.sh" -f "$VERSIONS" -g)}"
 GO_SHA256="${GO_SHA256:-$(yq -r '.golang.checksum.sha256.amd64' "$VERSIONS")}"
-GO_BUILD_IMAGE="${GO_BUILD_IMAGE:-calico/go-build:$("$REPO/hack/generate-version-tag-name.sh" -f "$VERSIONS")}"
+# -p, not the bare tag: on a re-release the published tag carries a -1/-2 suffix
+# that versions.yaml does not, and pre-pulling the unsuffixed tag would warm the
+# cache with the build this one replaces.
+GO_BUILD_IMAGE="${GO_BUILD_IMAGE:-calico/go-build:$("$REPO/hack/generate-version-tag-name.sh" -f "$VERSIONS" -p)}"
 # kubectl tracks the same k8s release the go-build image is cut against.
 KUBECTL_VERSION="${KUBECTL_VERSION:-v$(yq -r '.kubernetes.version' "$VERSIONS")}"
-log "go $GO_VERSION, kubectl $KUBECTL_VERSION, prepulling $GO_BUILD_IMAGE (from images/calico-go-build/versions.yaml)"
+log "go $GO_VERSION, kubectl $KUBECTL_VERSION, prepulling $GO_BUILD_IMAGE"
 
 # Named off the go-build release tag, so image and toolchain match by eye; a branch
 # build carries its commit instead, which is what keeps it unique.

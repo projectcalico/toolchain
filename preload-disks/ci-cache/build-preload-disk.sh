@@ -45,7 +45,8 @@ GCS_PATH="${GCS_PATH:?set GCS_PATH to a gs:// bucket/path for the builder logs}"
 # pod requests, so a floating tag caches nothing. Add anything CI pulls often; the
 # default is this repo's go-build image, resolved so it cannot drift.
 if [ -z "${CONTAINER_IMAGES:-}" ]; then
-  go_build_tag="$("$REPO/hack/generate-version-tag-name.sh" -f "$REPO/images/calico-go-build/versions.yaml")"
+  # -p so a re-release caches the image it published, not the one it replaces.
+  go_build_tag="$("$REPO/hack/generate-version-tag-name.sh" -f "$REPO/images/calico-go-build/versions.yaml" -p)"
   CONTAINER_IMAGES="docker.io/calico/go-build:${go_build_tag}"
 fi
 BUILDER="$HERE/disk-image-builder"
