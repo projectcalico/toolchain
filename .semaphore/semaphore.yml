@@ -51,7 +51,10 @@ blocks:
       env_vars:
         # The branch to test the current go-build against
         - name: CALICO_BRANCH
-          value: master
+          value: release-v3.32
+        # The last commit on that branch that still builds with Kubernetes 1.35.
+        - name: CALICO_COMMIT
+          value: 5511ab1f72b9f7f90ce25e5698c83830967c03b4
       prologue:
         commands:
           - |
@@ -66,6 +69,9 @@ blocks:
             - make -C images calico-go-build-image ARCH=$ARCH
             - git clone -b "${CALICO_BRANCH}" --depth 1 git@github.com:projectcalico/calico.git calico
             - cd calico
+            # The shallow clone only holds the branch tip, so fetch the pinned commit first.
+            - git fetch --depth 1 origin "${CALICO_COMMIT}"
+            - git switch --detach "${CALICO_COMMIT}"
             - sed -i 's/^GO_BUILD_VER=.*$/GO_BUILD_VER=${CALICO_GO_BUILD_IMAGETAG}/' metadata.mk
             - if [ "${ARCH}" == "amd64" ]; then cd felix && make ut; fi
           matrix:
