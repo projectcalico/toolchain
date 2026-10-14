@@ -18,18 +18,13 @@ global_job_config:
     commands:
       - echo $DOCKER_TOKEN | docker login --username "$DOCKER_USER" --password-stdin
       - checkout
-      - |
-        if [ "${SEMAPHORE_GIT_REF_TYPE}" = "tag" ]; then
-          export BRANCH_NAME=${SEMAPHORE_GIT_TAG_NAME#signing-tools-}
-        else
-          export BRANCH_NAME=${SEMAPHORE_GIT_WORKING_BRANCH}
-        fi
+      - export BRANCH_NAME=${SEMAPHORE_GIT_TAG_NAME#signing-tools-}
 
 blocks:
   - name: Publish calico/signing-tools amd64 images
     dependencies: []
     run:
-      when: "branch = 'master' OR tag =~ '^signing-tools-v'"
+      when: "tag =~ '^signing-tools-v'"
     task:
       jobs:
         - name: Linux amd64

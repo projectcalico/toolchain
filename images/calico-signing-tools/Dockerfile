@@ -1,5 +1,4 @@
-# Pinned cosign and syft on scratch, with the TLS trust store both need to reach
-# registries. No entrypoint: callers run `cosign ...` or `syft ...` directly.
+# No entrypoint: callers run `cosign ...` or `syft ...` directly.
 ARG UBI_VERSION=ubi9
 
 FROM registry.access.redhat.com/${UBI_VERSION}/ubi-minimal:latest AS rootfs

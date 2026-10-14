@@ -55,11 +55,11 @@ promotions:
     pipeline_file: promotions/calico-scratch-utils.yml
     auto_promote:
       when: "branch = 'master' OR tag =~ '^scratch-utils-v'"
-  # A signing-tools-v* tag publishes the immutable :vX.Y the release tool pins.
+  # A signing-tools-v* tag publishes the immutable :vX.Y.
   - name: Publish calico/signing-tools images
     pipeline_file: promotions/calico-signing-tools.yml
     auto_promote:
-      when: "branch = 'master' OR tag =~ '^signing-tools-v'"
+      when: "tag =~ '^signing-tools-v'"
 
 blocks:
   - name: calico/go-build image

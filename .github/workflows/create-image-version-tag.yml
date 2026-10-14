@@ -17,6 +17,7 @@ jobs:
     permissions:
       contents: write
     strategy:
+      fail-fast: false
       matrix:
         image: [scratch-utils, signing-tools]
 

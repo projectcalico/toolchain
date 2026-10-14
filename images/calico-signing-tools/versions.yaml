@@ -1,5 +1,5 @@
-# Image tag (calico/signing-tools:<version>). Bump with any change below; the
-# release tool pins this tag, and a published tag is never rebuilt.
+# Image tag (calico/signing-tools:<version>). Bump with any change below: a
+# published tag is never rebuilt.
 signing-tools:
   version: v0.1
 # Stay on cosign v3: other majors store signatures differently.

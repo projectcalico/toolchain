@@ -142,8 +142,9 @@ endif
 SIGNING_TOOLS_VERSIONS := calico-signing-tools/versions.yaml
 CALICO_SIGNING_TOOLS_IMAGETAG ?= $(shell yq -r '.signing-tools.version' $(SIGNING_TOOLS_VERSIONS))
 
-# amd64 only, like scratch-utils: the release runners are x86_64.
+# amd64 only: the release runners are x86_64, and versions.yaml pins amd64 checksums.
 .PHONY: calico-signing-tools-image
+calico-signing-tools-image: override ARCH=amd64
 calico-signing-tools-image:
 	$(DOCKER_BUILD) \
 		--build-arg COSIGN_VERSION=$(shell yq -r '.cosign.version' $(SIGNING_TOOLS_VERSIONS)) \
@@ -156,9 +157,6 @@ calico-signing-tools-image:
 .PHONY: calico-signing-tools-cd
 calico-signing-tools-cd: calico-signing-tools-image var-require-one-of-CONFIRM-DRYRUN var-require-all-BRANCH_NAME
 	$(MAKE) BUILD_IMAGES=$(CALICO_SIGNING_TOOLS) retag-build-images-with-registries push-images-to-registries IMAGETAG=$(BRANCH_NAME) LATEST_IMAGE_TAG=$(CALICO_SIGNING_TOOLS_IMAGETAG) VALIDARCHES=amd64 EXCLUDEARCH="$(EXCLUDEARCH)"
-ifeq ($(BRANCH_NAME),master)
-	$(MAKE) BUILD_IMAGES=$(CALICO_SIGNING_TOOLS) retag-build-images-with-registries push-images-to-registries IMAGETAG=latest LATEST_IMAGE_TAG=$(CALICO_SIGNING_TOOLS_IMAGETAG) VALIDARCHES=amd64 EXCLUDEARCH="$(EXCLUDEARCH)"
-endif
 
 ################################################################################
 # Calico rust-build image with Rust toolchain.
