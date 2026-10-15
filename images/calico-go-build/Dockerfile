@@ -1,7 +1,7 @@
 ARG TARGETARCH=${TARGETARCH}
 
 # Bump to pick up a change to the Argo CI helper scripts copied in near the end.
-ARG CI_SCRIPTS_VERSION=v1
+ARG CI_SCRIPTS_VERSION=v2
 FROM calico/ci-scripts:${CI_SCRIPTS_VERSION} AS ci-scripts
 
 FROM almalinux:9 AS builder
