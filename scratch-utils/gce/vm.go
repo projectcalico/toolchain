@@ -101,10 +101,15 @@ func (c *Client) createInZone(ctx context.Context, zone string, cfg Config) erro
 	return nil
 }
 
+// CleanupTimeout bounds the synchronous delete a timed-out zone performs before the
+// next zone is tried. Exported because it is part of any caller's overall budget:
+// each failing zone costs PerZoneTimeout + CleanupTimeout, not PerZoneTimeout.
+const CleanupTimeout = 2 * time.Minute
+
 // deleteBestEffort builds its own context: the caller's is typically already
 // expired, which is why we are here.
 func (c *Client) deleteBestEffort(zone, name string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), CleanupTimeout)
 	defer cancel()
 	fmt.Fprintf(os.Stderr, "[gce] cleaning up abandoned %s in %s\n", name, zone)
 	if err := c.Delete(ctx, zone, name); err != nil {
