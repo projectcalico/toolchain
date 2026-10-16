@@ -1,5 +1,9 @@
 ARG TARGETARCH=${TARGETARCH}
 
+# Bump to pick up a change to the Argo CI helper scripts copied in near the end.
+ARG CI_SCRIPTS_VERSION=v2
+FROM calico/ci-scripts:${CI_SCRIPTS_VERSION} AS ci-scripts
+
 FROM almalinux:9 AS builder
 
 ARG TARGETARCH
@@ -7,8 +11,8 @@ ARG TARGETARCH
 ARG CONTAINERREGISTRY_VERSION=v0.21.9
 ARG CONTROLLER_TOOLS_VERSION=v0.18.0
 ARG GINKGO_VERSION=v2.32.1
-ARG GO_LINT_VERSION=v2.13.1
-ARG MOCKERY_VERSION=3.7.4
+ARG GO_LINT_VERSION=v2.14.0
+ARG MOCKERY_VERSION=3.8.1
 ARG OCB_VERSION=0.157.0
 ARG PROTOC_VERSION=36.0
 
@@ -50,6 +54,7 @@ RUN set -eux; \
         pcre-devel \
         pigz \
         pkg-config \
+        sudo \
         wget \
         xz \
         zip
@@ -273,8 +278,8 @@ RUN set -eux; \
     go install github.com/jstemmer/go-junit-report@v1.0.0 && \
     go install github.com/onsi/ginkgo/v2/ginkgo@${GINKGO_VERSION} && \
     go install github.com/wadey/gocovmerge@v0.0.0-20160331181800-b5bfa59ec0ad && \
-    go install golang.org/x/tools/cmd/goimports@v0.49.0 && \
-    go install golang.org/x/tools/cmd/stringer@v0.49.0 && \
+    go install golang.org/x/tools/cmd/goimports@v0.50.0 && \
+    go install golang.org/x/tools/cmd/stringer@v0.50.0 && \
     go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2 && \
     go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12 && \
     go install gotest.tools/gotestsum@v1.13.0 && \
@@ -306,9 +311,19 @@ COPY bin/semvalidator-${TARGETARCH} /usr/local/bin/semvalidator
 # Install Argo CI helper scripts so this image can serve as the base for Argo
 # workflows, which have no pre-checkout step. Semaphore runners do their own
 # checkout and ignore these.
-COPY scripts/checkout.sh /usr/local/bin/checkout
-COPY scripts/setup-github-ssh.sh /usr/local/bin/setup-github-ssh
-COPY scripts/create-local-secret.sh /usr/local/bin/create-local-secret
+COPY --from=ci-scripts /artifact /usr/local/bin/artifact
+COPY --from=ci-scripts /changesIn /usr/local/bin/changesIn
+COPY --from=ci-scripts /checkout /usr/local/bin/checkout
+COPY --from=ci-scripts /createLocalSecret /usr/local/bin/createLocalSecret
+COPY --from=ci-scripts /logSection /usr/local/bin/logSection
+COPY --from=ci-scripts /setupGithubSSH /usr/local/bin/setupGithubSSH
+
+# Some callers use the kebab-case spellings; alias them so there is one
+# implementation rather than two that can disagree.
+RUN set -eux; \
+    cd /usr/local/bin; \
+    ln -sf setupGithubSSH setup-github-ssh; \
+    ln -sf createLocalSecret create-local-secret
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 
