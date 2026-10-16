@@ -28,11 +28,24 @@ global_job_config:
           export BRANCH_NAME=${SEMAPHORE_GIT_WORKING_BRANCH}
         fi
 
+# Both images cache or bake calico/go-build, so they are rebuilt once it is
+# published -- chained here rather than off the root pipeline so they cannot start
+# before the image they consume exists.
+promotions:
+  - name: Build ci-base VM image
+    pipeline_file: ci-base-vm-image.yml
+    auto_promote:
+      when: "result = 'passed'"
+  - name: Build go-build preload disk image
+    pipeline_file: preload-disk-image.yml
+    auto_promote:
+      when: "result = 'passed'"
+
 blocks:
   - name: Publish calico/go-build images
     dependencies: []
     run:
-      when: "branch = 'master' OR tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+\\.\\d\\.\\d-k8s1\\.\\d+\\.\\d+'"
+      when: "branch = 'master' OR tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+(\\.\\d+){2}-k8s1\\.\\d+\\.\\d+'"
     task:
       jobs:
         - name: Linux multi-arch
@@ -45,7 +58,7 @@ blocks:
     dependencies:
       - Publish calico/go-build images
     run:
-      when: "branch = 'master' OR tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+\\.\\d\\.\\d-k8s1\\.\\d+\\.\\d+'"
+      when: "branch = 'master' OR tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+(\\.\\d+){2}-k8s1\\.\\d+\\.\\d+'"
     task:
       jobs:
         - name: Linux multi-arch manifests
@@ -55,7 +68,7 @@ blocks:
     dependencies:
       - Publish calico/go-build multi-arch manifests
     run:
-      when: "tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+\\.\\d\\.\\d-k8s1\\.\\d+\\.\\d+'"
+      when: "tag =~ '^1\\.\\d+\\.\\d+-llvm\\d+(\\.\\d+){2}-k8s1\\.\\d+\\.\\d+'"
     task:
       secrets:
         - name: semaphore-api
