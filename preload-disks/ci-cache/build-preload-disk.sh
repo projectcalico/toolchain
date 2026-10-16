@@ -64,6 +64,16 @@ args=(
 )
 for img in $CONTAINER_IMAGES; do args+=(--container-image="$img"); done
 
+# The builder names its scratch VM and disk after the job, with ExactName set, so
+# two builds sharing a job name collide on those resources in the same project and
+# zone even when their output images differ. Left unset the CLI calls every job
+# "secondary-disk-image", which is exactly that case. The output image name is
+# already unique per build, so derive from it. The CLI caps the job name below 50
+# characters and requires RFC1035, so trim and strip any trailing hyphen the trim
+# leaves behind -- IMAGE_NAME is 39 at most by default, but it is overridable.
+JOB_NAME="${JOB_NAME:-$(printf '%.49s' "$IMAGE_NAME" | sed 's/-*$//')}"
+args+=(--job-name="$JOB_NAME")
+
 # Release images are immutable; branch images are replaced. A pool stores the image
 # PATH, not an id, so a same-name recreate leaves its config valid.
 # Unique per build, so a collision means this commit is already built. Nothing is

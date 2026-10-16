@@ -31,6 +31,11 @@ repo, so `go get` reaches only an abandoned 2023 snapshot.
   member, so this cannot break the same way again. Bookworm and not trixie because
   `script/startup.sh` was written against bullseye, and bookworm's containerd 1.6
   keeps the `ctr -n k8s.io snapshot view` behaviour it relies on.
+- `script/verify.sh`: rejects a missing or empty `snapshots.metadata` instead of
+  reporting success. The verification loop reads that file by redirection, and
+  upstream has no `set -e`, so an absent file meant zero iterations, an unset
+  `snapshot_broken`, and a printed "Disk image verification succeeds" that Daisy
+  takes at face value -- an empty disk or a failed mount certified as verified.
 - Module path renamed to this directory.
 - Dropped the `toolchain go1.24.13` directive, so it builds with whatever Go is
   installed at or above the `go` directive rather than fetching its own.
