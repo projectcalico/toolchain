@@ -21,10 +21,37 @@ func LocalSecret(name, destPath string) (found bool, err error) {
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 		return false, fmt.Errorf("mkdir for %s: %w", destPath, err)
 	}
-	if err := os.WriteFile(destPath, []byte(v), 0o600); err != nil {
+	if err := writePrivate(destPath, []byte(v)); err != nil {
 		return false, fmt.Errorf("write secret %s: %w", destPath, err)
 	}
 	return true, nil
+}
+
+// writePrivate writes data to destPath at 0600, whether or not destPath already
+// exists. os.WriteFile applies its mode only when it creates the file, so writing a
+// secret over an existing 0644 path left it readable by everyone -- the helper
+// promised a private file and silently did not deliver one. Staging in the
+// destination directory keeps the rename atomic and on the same filesystem.
+func writePrivate(destPath string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(destPath), "."+filepath.Base(destPath)+".tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp) // no-op once the rename below succeeds
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	// CreateTemp already makes it 0600; this is belt and braces against a umask
+	// change and states the intent at the point it matters.
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, destPath)
 }
 
 // MustLocalSecret is LocalSecret, but absent means error — for a secret the caller

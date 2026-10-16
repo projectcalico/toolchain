@@ -5,6 +5,9 @@ package createvm
 import (
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/projectcalico/go-build/scratch-utils/gce"
 )
 
 func TestParseDiskGB(t *testing.T) {
@@ -92,5 +95,22 @@ func TestRequiresAnImageOrAFamily(t *testing.T) {
 	// It must fail on config, not by reaching for credentials first.
 	if strings.Contains(err.Error(), "compute SA") {
 		t.Errorf("config should be validated before auth: %v", err)
+	}
+}
+
+// Each failing zone costs its attempt plus the synchronous cleanup that follows it.
+// Budgeting only the attempt meant the last of four zones was never tried.
+func TestOverallTimeoutLeavesEveryZoneAFullAttempt(t *testing.T) {
+	perZone := gce.PerZoneTimeout + gce.CleanupTimeout
+	for _, zones := range []int{1, 2, 3, 4, 8} {
+		got := overallTimeout(zones)
+		if min := time.Duration(zones) * perZone; got < min {
+			t.Errorf("zones=%d: budget %v is under %v, so the last zone can be skipped", zones, got, min)
+		}
+	}
+	// The default zone list, spelled out: four zones that each burn the full
+	// attempt-plus-cleanup must still all be reached.
+	if got, want := overallTimeout(4), 4*(3*time.Minute+2*time.Minute); got < want {
+		t.Errorf("four zones: %v < %v", got, want)
 	}
 }
