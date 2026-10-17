@@ -135,13 +135,18 @@ func (c *Client) instanceSpec(zone string, cfg Config) *compute.Instance {
 			Scopes: []string{compute.CloudPlatformScope},
 		}},
 	}
+	// Guest attributes are how the agent publishes this VM's SSH host keys, which
+	// DialSSH pins instead of trusting whatever answers on port 22. Set here because
+	// the agent reads it at boot: enabling it later publishes nothing until a reboot.
+	md := &compute.Metadata{Items: []*compute.MetadataItems{
+		{Key: "enable-guest-attributes", Value: new("TRUE")},
+	}}
 	// Optional: the ci-base image is already provisioned, so createvm passes none.
 	// Only set it for a stock image.
 	if cfg.StartupScript != "" {
-		inst.Metadata = &compute.Metadata{Items: []*compute.MetadataItems{
-			{Key: "startup-script", Value: new(cfg.StartupScript)},
-		}}
+		md.Items = append(md.Items, &compute.MetadataItems{Key: "startup-script", Value: new(cfg.StartupScript)})
 	}
+	inst.Metadata = md
 	if cfg.MaxRun > 0 {
 		inst.Scheduling = &compute.Scheduling{
 			ProvisioningModel:         "STANDARD",
