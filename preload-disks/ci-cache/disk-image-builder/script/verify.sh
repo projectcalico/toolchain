@@ -51,6 +51,14 @@ function verify_snapshots() {
   echo verifying the snapshots...
   sudo ls /mnt/disks/container_layers
   snapshot_metadata_file="/mnt/disks/container_layers/snapshots.metadata"
+  # Without this the loop below simply runs zero times when the file is missing or
+  # empty -- the redirection fails, the script has no `set -e` to stop it, and
+  # snapshot_broken stays unset, so it prints success and Daisy believes it. An
+  # empty disk or a failed mount would be certified as verified.
+  if [ ! -s "$snapshot_metadata_file" ]; then
+    echo "Image verfication failure: $snapshot_metadata_file is missing or empty; nothing was verified."
+    exit 1
+  fi
   while IFS= read -r line
   do
     echo "$line"
