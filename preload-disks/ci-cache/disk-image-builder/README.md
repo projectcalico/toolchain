@@ -31,18 +31,29 @@ repo, so `go get` reaches only an abandoned 2023 snapshot.
   member, so this cannot break the same way again. Bookworm and not trixie because
   `script/startup.sh` was written against bullseye, and bookworm's containerd 1.6
   keeps the `ctr -n k8s.io snapshot view` behaviour it relies on.
-- `script/verify.sh`: rejects a missing or empty `snapshots.metadata` instead of
-  reporting success. The verification loop reads that file by redirection, and
-  upstream has no `set -e`, so an absent file meant zero iterations, an unset
-  `snapshot_broken`, and a printed "Disk image verification succeeds" that Daisy
-  takes at face value -- an empty disk or a failed mount certified as verified.
-- `script/startup.sh`: four guards, all of which exist because the script has no
-  `set -e` and ends by printing the marker Daisy reads as success. A failed or empty
-  `ctr snapshot list` skipped the loop and published an empty disk; `original_path`
-  was never cleared per snapshot, so a snapshot whose retries all failed recorded the
-  previous one's path against its chain ID; an unmount failure still advertised
-  completion; and `cp -r -p` dropped the extended attributes holding capabilities and
-  overlayfs opaque markers, which the content-only checksums cannot detect.
+- `script/startup.sh` and `script/verify.sh` run under `set -euo pipefail`. Both
+  signal success by printing a marker the caller matches on, and upstream checked
+  exit status by hand, so every missed check published a disk: a failed or empty
+  `ctr snapshot list`, a `find` that failed inside a checksum pipeline, an unchecked
+  mount or unmount, an image listing that wrote nothing, a snapshot whose retries all
+  failed reusing the previous one's path. Three rounds of review each turned up more
+  of the same, so the default is inverted rather than patched case by case.
+
+  The conversion is not only the `set` line. Every `if [ $? -ne 0 ]` became `if !
+  cmd`, since under `set -e` the failure exits before the test is reached and takes
+  the message with it; the retry loop around `ctr snapshot view` handles its own
+  failures, as retrying is the point; `grep` with no match is tolerated where no match
+  is ordinary (no snapshot views on a fresh builder); `rm` of `snapshots.metadata`
+  needs `-f`, because the disk has just been formatted and a bare `rm` is now fatal;
+  and `snapshot_broken` is initialised, as `set -u` would otherwise fail every clean
+  verification.
+
+  Alongside it, two correctness fixes that strict mode alone does not cover: a missing
+  snapshot directory hashed to the md5 of nothing, which is exactly the checksum
+  recorded for a layer with no regular files, so a layer that never reached the disk
+  verified clean; and `cp -r -p` dropped the extended attributes holding file
+  capabilities and overlayfs opaque markers, which the content-only checksums cannot
+  see. Now an explicit directory check and `cp -a`.
 - Module path renamed to this directory.
 - Dropped the `toolchain go1.24.13` directive, so it builds with whatever Go is
   installed at or above the `go` directive rather than fetching its own.

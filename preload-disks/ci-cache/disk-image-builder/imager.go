@@ -362,8 +362,12 @@ func VerifyDiskImage(ctx context.Context, req Request) error {
 						Name:   fmt.Sprintf("%s-disk", req.JobName),
 						Type:   req.DiskType,
 						SizeGb: req.DiskSizeGB,
-						// Use the image to be verified to create a disk.
-						SourceImage: req.ImageName,
+						// Fully qualified. Daisy rejects a bare name here ("missing
+						// reference for image"), and the CLI rejects a qualified one
+						// as too long for an image name, so --verify-only could not
+						// be invoked at all: the workflow failed in validation,
+						// before any VM booted.
+						SourceImage: fmt.Sprintf("projects/%s/global/images/%s", req.ProjectName, req.ImageName),
 					},
 				},
 			},
