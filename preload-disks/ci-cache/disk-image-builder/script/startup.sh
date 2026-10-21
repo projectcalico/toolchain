@@ -19,6 +19,12 @@
 # script, and the commands that may legitimately fail are marked as such below.
 set -euo pipefail
 
+# Same reasoning as verify.sh. The generate workflow does match the guest agent's own
+# "startup-script-url exit status 1", but that is the literal status 1: under set -e
+# the script exits with the failing command's status, and `apt update` returning 100
+# would go unmatched. The trap emits a marker that does not depend on the code.
+trap 'rc=$?; [ "$rc" -eq 0 ] || echo "Disk image generation failure: the startup script exited with status $rc."; exit "$rc"' EXIT
+
 sudo apt update
 sudo apt-get update
 

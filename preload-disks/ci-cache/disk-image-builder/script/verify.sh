@@ -19,6 +19,14 @@
 # places that may legitimately fail say so explicitly below.
 set -euo pipefail
 
+# Daisy watches the serial console for one of two strings and waits out its timeout if
+# it sees neither. Strict mode exits silently on any unchecked failure, so without
+# this the VM would sit there until the deadline -- `apt update` returning 100 is
+# enough. The trap guarantees the marker and preserves the status.
+#
+# "verfication" is upstream's spelling in imager.go's FailureMatch. It has to match.
+trap 'rc=$?; [ "$rc" -eq 0 ] || echo "Image verfication failure: the verification script exited with status $rc."; exit "$rc"' EXIT
+
 sudo apt update
 sudo apt-get update
 

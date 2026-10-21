@@ -285,6 +285,10 @@ func GenerateDiskImage(ctx context.Context, req Request) error {
 						Port:         1,
 						SuccessMatch: "Unpacking is completed",
 						FailureMatch: []string{
+							// The agent's own line only matches the literal status 1;
+							// startup.sh's EXIT trap emits the first of these for any
+							// non-zero status, so a failure cannot hang the workflow.
+							"Disk image generation failure",
 							"startup-script-url exit status 1",
 							"Failed to pull and unpack the image",
 						},
