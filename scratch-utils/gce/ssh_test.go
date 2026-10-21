@@ -479,3 +479,61 @@ func TestTarDirFollowsASymlinkedRoot(t *testing.T) {
 		t.Errorf("inner-link.txt linkname = %q, want %q", h.Linkname, "top.txt")
 	}
 }
+
+// getCommand must forgive a missing directory and nothing else. `cd && tar || true`
+// also swallowed tar's own exit status, so a partial archive came back as success.
+func TestGetCommandForgivesOnlyAMissingDirectory(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	run := func(dir string) (int, int) {
+		t.Helper()
+		cmd := exec.Command("bash", "-c", getCommand(dir))
+		out, err := cmd.Output()
+		code := 0
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		return code, len(out)
+	}
+
+	base := t.TempDir()
+
+	// Missing: succeed with nothing, so an epilogue with no artifacts is not an error.
+	if code, n := run(filepath.Join(base, "absent")); code != 0 || n != 0 {
+		t.Errorf("missing dir: exit=%d bytes=%d, want 0 and 0", code, n)
+	}
+
+	// Present: succeed with an archive.
+	present := filepath.Join(base, "present")
+	if err := os.MkdirAll(present, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(present, "a.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, n := run(present); code != 0 || n == 0 {
+		t.Errorf("present dir: exit=%d bytes=%d, want 0 and non-empty", code, n)
+	}
+
+	// Unreadable member: tar exits non-zero, and that must reach the caller.
+	if os.Geteuid() == 0 {
+		t.Skip("running as root, which can read the unreadable file")
+	}
+	broken := filepath.Join(base, "broken")
+	if err := os.MkdirAll(filepath.Join(broken, "locked"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(broken, "locked", "secret"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(broken, "locked"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(broken, "locked"), 0o755) })
+	if code, _ := run(broken); code == 0 {
+		t.Error("tar failure was reported as success")
+	}
+}

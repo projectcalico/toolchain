@@ -285,6 +285,10 @@ func GenerateDiskImage(ctx context.Context, req Request) error {
 						Port:         1,
 						SuccessMatch: "Unpacking is completed",
 						FailureMatch: []string{
+							// The agent's own line only matches the literal status 1;
+							// startup.sh's EXIT trap emits the first of these for any
+							// non-zero status, so a failure cannot hang the workflow.
+							"Disk image generation failure",
 							"startup-script-url exit status 1",
 							"Failed to pull and unpack the image",
 						},
@@ -362,8 +366,12 @@ func VerifyDiskImage(ctx context.Context, req Request) error {
 						Name:   fmt.Sprintf("%s-disk", req.JobName),
 						Type:   req.DiskType,
 						SizeGb: req.DiskSizeGB,
-						// Use the image to be verified to create a disk.
-						SourceImage: req.ImageName,
+						// Fully qualified. Daisy rejects a bare name here ("missing
+						// reference for image"), and the CLI rejects a qualified one
+						// as too long for an image name, so --verify-only could not
+						// be invoked at all: the workflow failed in validation,
+						// before any VM booted.
+						SourceImage: fmt.Sprintf("projects/%s/global/images/%s", req.ProjectName, req.ImageName),
 					},
 				},
 			},
