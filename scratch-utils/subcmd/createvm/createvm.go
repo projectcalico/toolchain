@@ -68,9 +68,8 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("GOOGLE_VM_ZONES is empty")
 	}
 	// Bound the whole create so an operation that never reaches DONE fails the step
-	// instead of hanging it until the workflow's own timeout. Derived from the zone
-	// count so every zone gets its full per-zone budget.
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(len(zones))*gce.PerZoneTimeout+time.Minute)
+	// instead of hanging it until the workflow's own timeout.
+	ctx, cancel := context.WithTimeout(ctx, overallTimeout(len(zones)))
 	defer cancel()
 
 	cfg := gce.Config{
@@ -141,4 +140,11 @@ func parseDiskGB(s string) (int64, error) {
 		return 0, fmt.Errorf("GOOGLE_VM_DISK_SIZE %q: must be positive", s)
 	}
 	return n, nil
+}
+
+// overallTimeout budgets every zone a full attempt. A timed-out zone then deletes the
+// abandoned VM synchronously, so it costs PerZoneTimeout + CleanupTimeout; counting
+// only the former left the last zone unattempted. The minute covers client setup.
+func overallTimeout(zones int) time.Duration {
+	return time.Duration(zones)*(gce.PerZoneTimeout+gce.CleanupTimeout) + time.Minute
 }

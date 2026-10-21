@@ -64,6 +64,19 @@ args=(
 )
 for img in $CONTAINER_IMAGES; do args+=(--container-image="$img"); done
 
+# The builder names its scratch VM and disk after the job with ExactName set, so
+# concurrent builds sharing one collide; unset, the CLI names every job the same.
+# Not truncated to the CLI's sub-50 limit: two trimmed long names would converge and
+# collide again. The default is 39 at most, so only an override has to care.
+JOB_NAME="${JOB_NAME:-$IMAGE_NAME}"
+if [ "${#JOB_NAME}" -ge 50 ]; then
+  echo "job name '$JOB_NAME' is ${#JOB_NAME} characters; the builder's limit is 49." >&2
+  echo "set JOB_NAME to something unique and shorter -- it names the builder's" >&2
+  echo "scratch VM and disk, so two concurrent builds must not share one." >&2
+  exit 1
+fi
+args+=(--job-name="$JOB_NAME")
+
 # Release images are immutable; branch images are replaced. A pool stores the image
 # PATH, not an id, so a same-name recreate leaves its config valid.
 # Unique per build, so a collision means this commit is already built. Nothing is

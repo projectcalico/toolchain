@@ -113,7 +113,10 @@ log "verifying the toolchain before snapshotting"
 if ! gcloud --quiet compute ssh "ubuntu@$BUILDER" --project="$PROJECT" --zone="$ZONE" \
   --command="set -e
     docker --version
-    /usr/local/go/bin/go version
+    # Bare, not an absolute path: this runs over an SSH exec session, the same
+    # non-login shell runonvm uses, so it is what proves a job can find Go.
+    go version
+    command -v gofmt >/dev/null || { echo 'gofmt is not on PATH'; exit 1; }
     kind version
     kubectl version --client
     gh --version

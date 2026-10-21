@@ -112,3 +112,49 @@ func TestSetupComputeADCErrorsWhenTheEnvVarIsMissing(t *testing.T) {
 		t.Fatal("want an error when the named env var is unset")
 	}
 }
+
+// os.WriteFile applies its mode only on create, so a secret written over an existing
+// world-readable path stayed readable.
+func TestLocalSecretTightensAnExistingPermissiveFile(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(dest, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TEST_SECRET_OVERWRITE", "fresh")
+
+	found, err := LocalSecret("TEST_SECRET_OVERWRITE", dest)
+	if err != nil {
+		t.Fatalf("LocalSecret: %v", err)
+	}
+	if !found {
+		t.Fatal("expected the secret to be found")
+	}
+
+	fi, err := os.Stat(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != 0o600 {
+		t.Errorf("mode = %04o, want 0600", got)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "fresh" {
+		t.Errorf("content = %q, want %q", got, "fresh")
+	}
+
+	// No staging file left beside the secret.
+	entries, err := os.ReadDir(filepath.Dir(dest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("leftover files beside the secret: %v", names)
+	}
+}

@@ -21,10 +21,30 @@ func LocalSecret(name, destPath string) (found bool, err error) {
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 		return false, fmt.Errorf("mkdir for %s: %w", destPath, err)
 	}
-	if err := os.WriteFile(destPath, []byte(v), 0o600); err != nil {
+	if err := writePrivate(destPath, []byte(v)); err != nil {
 		return false, fmt.Errorf("write secret %s: %w", destPath, err)
 	}
 	return true, nil
+}
+
+// writePrivate writes data to destPath at 0600 even when destPath already exists.
+// os.WriteFile applies its mode only on create, so a secret written over an existing
+// 0644 path stayed readable. CreateTemp is 0600 regardless of umask.
+func writePrivate(destPath string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(destPath), "."+filepath.Base(destPath)+".tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp) // no-op once the rename below succeeds
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, destPath)
 }
 
 // MustLocalSecret is LocalSecret, but absent means error — for a secret the caller

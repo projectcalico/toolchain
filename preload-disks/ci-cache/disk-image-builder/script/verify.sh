@@ -51,6 +51,12 @@ function verify_snapshots() {
   echo verifying the snapshots...
   sudo ls /mnt/disks/container_layers
   snapshot_metadata_file="/mnt/disks/container_layers/snapshots.metadata"
+  # Missing or empty means zero iterations below, and with no `set -e` the script
+  # then prints success: an empty disk or a failed mount certified as verified.
+  if [ ! -s "$snapshot_metadata_file" ]; then
+    echo "Image verfication failure: $snapshot_metadata_file is missing or empty; nothing was verified."
+    exit 1
+  fi
   while IFS= read -r line
   do
     echo "$line"

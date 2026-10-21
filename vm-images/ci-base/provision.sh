@@ -45,7 +45,11 @@ fetch /tmp/go.tgz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"
 # Checksum from versions.yaml, as the go-build Dockerfile does.
 echo "${GO_SHA256}  /tmp/go.tgz" | sha256sum -c -
 rm -rf /usr/local/go && tar -C /usr/local -xzf /tmp/go.tgz
-# go + a per-user GOBIN on PATH for interactive + non-interactive shells.
+# runonvm runs `bash <script>` over an SSH exec session: non-login and
+# non-interactive, so bash reads neither /etc/profile nor profile.d. /usr/local/bin is
+# already on sshd's default PATH, which is what makes these findable from a job.
+for b in /usr/local/go/bin/*; do ln -sf "$b" "/usr/local/bin/$(basename "$b")"; done
+# $HOME is per-user, so GOBIN cannot be a symlink and stays in the profile.
 printf 'export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin\n' > /etc/profile.d/go.sh
 
 fetch /usr/local/bin/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
