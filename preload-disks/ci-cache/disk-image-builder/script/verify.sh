@@ -12,6 +12,13 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+# Upstream relied on every command being checked by hand, and repeatedly was not:
+# an unchecked mount, a find that failed inside a pipeline, a variable only set on
+# one branch. The script signals success by printing a marker, so each gap published
+# a disk. Strict mode makes an unchecked failure stop the script by default; the
+# places that may legitimately fail say so explicitly below.
+set -euo pipefail
+
 sudo apt update
 sudo apt-get update
 
@@ -43,10 +50,17 @@ if ! [ -b "$DEVICE_NODE" ]; then
 fi
 
 function verify_snapshots() {
+  # Only ever set on the mismatch branch, so under `set -u` the check at the end
+  # would be an unbound-variable error on every clean run.
+  snapshot_broken=""
+
   # Prepare the disk image directories.
   echo Preparing the disk image directories...
   sudo mkdir -p /mnt/disks/container_layers
-  sudo mount -o discard,defaults $DEVICE_NODE /mnt/disks/container_layers
+  if ! sudo mount -o discard,defaults "$DEVICE_NODE" /mnt/disks/container_layers; then
+    echo "Image verfication failure: failed to mount $DEVICE_NODE. Please rerun the tool to try it again."
+    exit 1
+  fi
 
   echo verifying the snapshots...
   sudo ls /mnt/disks/container_layers
@@ -69,7 +83,16 @@ function verify_snapshots() {
       exit 1
     fi
 
-    actual_checksum="$(find /mnt/disks/container_layers/${snapshot_path} -type f -exec md5sum {} + | cut -d' ' -f1 | LC_ALL=C sort | md5sum | cut -d' ' -f1)"
+    # A missing directory hashes to the md5 of nothing, which is exactly the
+    # checksum recorded for a layer that legitimately has no regular files -- so a
+    # layer that never reached the disk verified clean. `find` does report the
+    # failure, but before pipefail the pipeline swallowed it.
+    snapshot_dir="/mnt/disks/container_layers/${snapshot_path}"
+    if [ ! -d "$snapshot_dir" ]; then
+      echo "Image verfication failure: snapshot directory $snapshot_dir is missing for $snapshot_chainID."
+      exit 1
+    fi
+    actual_checksum="$(find "$snapshot_dir" -type f -exec md5sum {} + | cut -d' ' -f1 | LC_ALL=C sort | md5sum | cut -d' ' -f1)"
 
     if [ "$expected_checksum" = "$actual_checksum" ]; then
       echo "Verification succeeds for snapshot $snapshot_chainID at $snapshot_path."

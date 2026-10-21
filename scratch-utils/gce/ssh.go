@@ -304,6 +304,19 @@ func (s *SSH) PutDir(localDir, remoteDir string) error {
 	return nil
 }
 
+// getCommand tars the contents of remoteDir (not the directory itself) to stdout, so
+// they land directly under the local destination.
+//
+// A missing directory is forgiven, tar's own failures are not. `cd && tar || true`
+// forgave both: a tar that exited non-zero -- an unreadable file, or one that changed
+// while being read -- still emitted a valid archive of whatever it managed to read,
+// untar accepted it, and GetDir returned nil. A partial download was reported as a
+// complete one.
+func getCommand(remoteDir string) string {
+	q := util.ShellQuote(remoteDir)
+	return fmt.Sprintf("if [ -d %s ]; then cd %s && tar czf - .; fi", q, q)
+}
+
 // GetDir streams a remote directory's contents into localDir. Best-effort: a
 // missing remote path is not an error, since an epilogue runs precisely when the
 // files it wants may have never been produced.
@@ -318,9 +331,7 @@ func (s *SSH) GetDir(remoteDir, localDir string) error {
 	if err != nil {
 		return err
 	}
-	// Tar the contents (not the dir itself) so they land directly under localDir.
-	cmd := fmt.Sprintf("cd %s 2>/dev/null && tar czf - . || true", util.ShellQuote(remoteDir))
-	if err := sess.Start(cmd); err != nil {
+	if err := sess.Start(getCommand(remoteDir)); err != nil {
 		return err
 	}
 	if err := untar(stdout, localDir); err != nil {
