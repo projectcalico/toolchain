@@ -25,7 +25,9 @@ bin/semvalidator-$(ARCH): semvalidator/main.go
 # := so the find runs once, not on every expansion of the prerequisite list.
 SCRATCH_UTILS_SRCS := $(shell find scratch-utils ../scratch-utils -name '*.go')
 
-bin/scratch-utils-$(ARCH): $(SCRATCH_UTILS_SRCS)
+# The module files too: a dependency-only bump changes the binary without touching
+# any .go file, and the image build would otherwise copy the previous one.
+bin/scratch-utils-$(ARCH): $(SCRATCH_UTILS_SRCS) ../go.mod ../go.sum
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(ARCH) \
 		go build -o bin/scratch-utils-$(ARCH) -v -buildvcs=false -ldflags "-s -w" ./scratch-utils
 

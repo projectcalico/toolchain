@@ -17,7 +17,11 @@ ZONE="${ZONE:-us-central1-a}"
 # build in the same family, and since a family resolves to its newest member, a
 # master build would become what every CI VM boots from.
 FAMILY="${FAMILY:-}"
-BUILDER="${BUILDER:-ci-img-builder-$$}"
+# $$ is unique only on one host, and Semaphore agents share this project and zone, so
+# two agents could draw the same PID, pick the same name, and the loser's cleanup
+# would delete the winner's builder. 8 bytes of urandom instead; the date is there to
+# make a stray VM traceable to when it was started.
+BUILDER="${BUILDER:-ci-img-builder-$(date +%Y%m%d)-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 
@@ -76,9 +80,15 @@ STARTUP="$(mktemp)"
   tail -n +2 "$HERE/provision.sh" # its shebang is replaced by the one above
 } >"$STARTUP"
 
+# Only a builder this run created. Deleting unconditionally meant a failed create --
+# a name already taken being the obvious way to fail -- tore down whatever already
+# held the name.
+created=false
 cleanup() {
   rm -f "$STARTUP"
-  gcloud --quiet compute instances delete "$BUILDER" --project="$PROJECT" --zone="$ZONE" 2>/dev/null || true
+  if [ "$created" = true ]; then
+    gcloud --quiet compute instances delete "$BUILDER" --project="$PROJECT" --zone="$ZONE" 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT INT TERM
 
@@ -91,6 +101,7 @@ gcloud compute instances create "$BUILDER" --project="$PROJECT" --zone="$ZONE" \
   --boot-disk-size=50GB --boot-disk-type=pd-ssd \
   --max-run-duration=60m --instance-termination-action=DELETE \
   --metadata-from-file startup-script="$STARTUP"
+created=true
 
 log "waiting for provision.sh (~2-3 min)"
 ready=""

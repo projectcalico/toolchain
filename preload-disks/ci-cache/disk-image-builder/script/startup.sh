@@ -106,10 +106,24 @@ function write_image_info() {
 
 function process_snapshots() {
   echo Processing the snapshots...
-  snapshots=($(sudo ctr -n k8s.io snapshot list | grep "Committed" | cut -d ' ' -f1))
+  # Both guards matter because this script has no `set -e` and ends by printing the
+  # marker Daisy treats as success: a listing that failed, or one with nothing
+  # committed, would skip the loop entirely and still publish an empty disk.
+  if ! snapshot_list=$(sudo ctr -n k8s.io snapshot list); then
+    echo "Failed to list containerd snapshots. Please rerun the tool to try it again."
+    exit 1
+  fi
+  snapshots=($(echo "$snapshot_list" | grep "Committed" | cut -d ' ' -f1))
+  if [ ${#snapshots[@]} -eq 0 ]; then
+    echo "No committed snapshots to unpack: nothing was pulled, so there is no cache to publish."
+    exit 1
+  fi
 
   for snapshot in "${snapshots[@]}"; do
     echo Processing $snapshot
+    # Cleared per snapshot: left set, a snapshot whose every retry failed would reuse
+    # the previous one's path and record this chain ID against the wrong layer.
+    original_path=""
 
     # Add retry in case `ctr snapshot view` fails silently
     local retries=5
@@ -140,7 +154,10 @@ function process_snapshots() {
 
     new_path=$(echo $original_path | grep -o "snapshots/.*/fs")
     sudo mkdir -p "/mnt/disks/container_layers/${new_path}"
-    sudo cp -r -p $original_path "/mnt/disks/container_layers/${new_path}/.."
+    # -a, not -r -p: capabilities and overlayfs opaque markers live in extended
+    # attributes, which -p does not copy and the content-only checksums cannot see,
+    # so a layer would cache with different behaviour and still verify.
+    sudo cp -a $original_path "/mnt/disks/container_layers/${new_path}/.."
     # Check if the data was successfully copied over to the new path
     if [ $? -ne 0 ]; then
       echo Failed to copy the snapshot files for $snapshot from $original_path to /mnt/disks/container_layers/${new_path}. Please rerun the tool to try it again.
@@ -211,7 +228,12 @@ function unpack() {
 
   # We want to unmount the directory, otherwise we don't be able to generate the
   # image properly.
-  sudo umount /mnt/disks/container_layers
+  # Checked: still mounted means writes may not have reached the disk, and the
+  # marker below would have Daisy image it anyway.
+  if ! sudo umount /mnt/disks/container_layers; then
+    echo "Failed to unmount /mnt/disks/container_layers. Please rerun the tool to try it again."
+    exit 1
+  fi
 
   # This script must print out this message as a signal to the caller script,
   # meaning the unpacking is completed and the disk image creation can begin.

@@ -137,7 +137,9 @@ func run(ctx context.Context) int {
 		if info.IsDir() {
 			err = conn.PutDir(local, remote)
 		} else {
-			err = conn.PutFile(local, remote, 0o644)
+			// The local mode, not a fixed 0644: a helper script or binary uploaded
+			// this way arrived unexecutable. PutDir already preserves modes.
+			err = conn.PutFile(local, remote, info.Mode().Perm())
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "runonvm: %v\n", err)

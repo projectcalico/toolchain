@@ -335,6 +335,13 @@ func (s *SSH) GetDir(remoteDir, localDir string) error {
 
 // tarDir writes a gzipped tar of dir's contents (paths relative to dir) to w.
 func tarDir(dir string, w io.Writer) error {
+	// The root only. runonvm picks PutDir from os.Stat, which follows a symlink, but
+	// Walk does not follow the root it is given: its single visit is the link itself,
+	// skipped as ".", so `--put link-to-dir` shipped an empty archive and reported
+	// success. Links inside the tree are still shipped as links.
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
 	gz := gzip.NewWriter(w)
 	tw := tar.NewWriter(gz)
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {

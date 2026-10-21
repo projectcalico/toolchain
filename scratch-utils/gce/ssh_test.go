@@ -416,3 +416,66 @@ func TestPutCommandReplacesASymlinkDestination(t *testing.T) {
 		t.Errorf("the symlink's target was overwritten: %q", got)
 	}
 }
+
+// runonvm picks PutDir from os.Stat, which follows a symlink, but Walk does not
+// follow the root it is handed -- a --put of a link to a directory shipped nothing
+// and reported success.
+func TestTarDirFollowsASymlinkedRoot(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "realdir", "sub")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "realdir", "top.txt"), []byte("top"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "leaf.txt"), []byte("leaf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A link inside the tree must survive as a link, not be resolved along with root.
+	if err := os.Symlink("top.txt", filepath.Join(base, "realdir", "inner-link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "linkdir")
+	if err := os.Symlink(filepath.Join(base, "realdir"), link); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := tarDir(link, &buf); err != nil {
+		t.Fatalf("tarDir through a symlinked root: %v", err)
+	}
+
+	// Read the archive directly. untar writes only directories and regular files, so
+	// extracting would not show whether the inner link survived as a link.
+	gz, err := gzip.NewReader(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]*tar.Header{}
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		got[hdr.Name] = hdr
+	}
+
+	for _, want := range []string{"top.txt", "sub/leaf.txt"} {
+		if got[want] == nil {
+			t.Errorf("%s missing: the symlinked root shipped nothing", want)
+		}
+	}
+	// Resolving the root must not have flattened links inside the tree.
+	if h := got["inner-link.txt"]; h == nil {
+		t.Error("inner-link.txt missing from the archive")
+	} else if h.Typeflag != tar.TypeSymlink {
+		t.Errorf("inner-link.txt typeflag = %q, want TypeSymlink", h.Typeflag)
+	} else if h.Linkname != "top.txt" {
+		t.Errorf("inner-link.txt linkname = %q, want %q", h.Linkname, "top.txt")
+	}
+}

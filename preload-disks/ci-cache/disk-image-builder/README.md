@@ -36,6 +36,13 @@ repo, so `go get` reaches only an abandoned 2023 snapshot.
   upstream has no `set -e`, so an absent file meant zero iterations, an unset
   `snapshot_broken`, and a printed "Disk image verification succeeds" that Daisy
   takes at face value -- an empty disk or a failed mount certified as verified.
+- `script/startup.sh`: four guards, all of which exist because the script has no
+  `set -e` and ends by printing the marker Daisy reads as success. A failed or empty
+  `ctr snapshot list` skipped the loop and published an empty disk; `original_path`
+  was never cleared per snapshot, so a snapshot whose retries all failed recorded the
+  previous one's path against its chain ID; an unmount failure still advertised
+  completion; and `cp -r -p` dropped the extended attributes holding capabilities and
+  overlayfs opaque markers, which the content-only checksums cannot detect.
 - Module path renamed to this directory.
 - Dropped the `toolchain go1.24.13` directive, so it builds with whatever Go is
   installed at or above the `go` directive rather than fetching its own.
