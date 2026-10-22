@@ -1,0 +1,49 @@
+name: Create new Git tag on scratch-utils version change
+
+on:
+  # Tag a scratch-utils release when its version lands on master. The publish
+  # promotion fires on that tag, so an image tag cannot be republished with new
+  # contents -- doing so needs a new version here, which makes a new tag.
+  push:
+    branches:
+      - master
+    paths:
+      - images/calico-scratch-utils/versions.yaml
+
+jobs:
+  create-tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate tag name
+        id: generate-tag-name
+        run: |
+          version=$(yq -r '.scratch-utils.version' images/calico-scratch-utils/versions.yaml)
+          if [ -z "$version" ] || [ "$version" = "null" ]; then
+            echo "scratch-utils.version is empty" >&2
+            exit 1
+          fi
+          # Prefixed: this repo's release tags live in the same namespace as
+          # 1.27.1-llvm21.1.8-k8s1.37.0, and a second binary here would need its own.
+          tag_name="scratch-utils-${version}"
+          echo "Git tag name: $tag_name"
+          echo "tag_name=$tag_name" >> $GITHUB_OUTPUT
+
+      - name: Create and push new tag (if not exists)
+        run: |
+          tag_name=${{ steps.generate-tag-name.outputs.tag_name }}
+          if git ls-remote --tags --refs origin "$tag_name" | grep -q "$tag_name"; then
+            echo "Git tag $tag_name already exists"
+            exit 0
+          fi
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+          git tag -a "$tag_name" -m "Release $tag_name"
+          git push origin "$tag_name"
+          echo "Created Git tag $tag_name"
