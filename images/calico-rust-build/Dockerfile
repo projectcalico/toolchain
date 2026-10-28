@@ -66,6 +66,12 @@ RUN set -eux; \
     cargo --version; \
     rustc --version
 
+# Install cargo-auditable
+RUN set -eux; \
+    cargo install --locked cargo-auditable --version $(yq -r '.["cargo-auditable"].version' /etc/versions.yaml); \
+    rm -rf $CARGO_HOME/registry $CARGO_HOME/git; \
+    cargo install --list | grep cargo-auditable
+
 # Install cross-compilation sysroot for arm64 (amd64 host only).
 # Mirrors images/calico-go-build/Dockerfile: target-arch RPMs are downloaded
 # from AlmaLinux mirrors and extracted under /usr/<triple>/sys-root, with
