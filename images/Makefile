@@ -9,6 +9,38 @@ CALICO_TINYGO ?= tinygo
 CALICO_SCRATCH_UTILS ?= scratch-utils
 CALICO_SIGNING_TOOLS ?= signing-tools
 
+# Optional S3 build cache, enabled only when all of the S3_CACHE_* connection
+# variables below are set (in CI they come from the
+# projectcalico-toolchain-s3-secrets secret); otherwise images build as normal on
+# the default builder. The docker driver cannot export to s3, so cached builds run
+# on a dedicated docker-container builder, created on demand and never made the
+# default. It uses the host network so a local endpoint (e.g. MinIO on
+# localhost:9000) also works. Each target gets its own cache manifest, and a
+# failed cache export only warns rather than failing the build.
+#
+# The keys reach buildx as exported AWS_* environment variables rather than
+# cache attributes, so their values never appear in the echoed command or log.
+BUILDX_CACHE_BUILDER ?= calico-cache-builder
+S3_CACHE_REGION ?=
+S3_CACHE_ENDPOINT ?=
+S3_CACHE_BUCKET ?=
+S3_CACHE_ACCESS_KEY_ID ?=
+S3_CACHE_SECRET_ACCESS_KEY ?=
+S3_CACHE_USE_PATH_STYLE ?= true
+
+ifneq ($(and $(S3_CACHE_REGION),$(S3_CACHE_ENDPOINT),$(S3_CACHE_BUCKET),$(S3_CACHE_ACCESS_KEY_ID),$(S3_CACHE_SECRET_ACCESS_KEY)),)
+export AWS_ACCESS_KEY_ID = $(S3_CACHE_ACCESS_KEY_ID)
+export AWS_SECRET_ACCESS_KEY = $(S3_CACHE_SECRET_ACCESS_KEY)
+S3_CACHE = type=s3,region=$(S3_CACHE_REGION),bucket=$(S3_CACHE_BUCKET),endpoint_url=$(S3_CACHE_ENDPOINT),use_path_style=$(S3_CACHE_USE_PATH_STYLE),name=$@-$(ARCH)
+DOCKER_BUILD += --builder=$(BUILDX_CACHE_BUILDER) --cache-to=$(S3_CACHE),mode=max,ignore-error=true --cache-from=$(S3_CACHE)
+CACHE_BUILDER = buildx-cache-builder
+endif
+
+.PHONY: buildx-cache-builder
+buildx-cache-builder:
+	docker buildx inspect $(BUILDX_CACHE_BUILDER) >/dev/null 2>&1 || \
+		docker buildx create --name $(BUILDX_CACHE_BUILDER) --driver docker-container --driver-opt network=host
+
 .PHONY: build
 build:
 	$(MAKE) -C ../cmd build
@@ -52,7 +84,7 @@ UBI_VERSIONS ?= ubi9 ubi10
 calico-base-image: $(addprefix calico-base-image-,$(UBI_VERSIONS))
 
 .PHONY: calico-base-image-%
-calico-base-image-%: register
+calico-base-image-%: register | $(CACHE_BUILDER)
 	$(DOCKER_BUILD) --build-arg LDSONAME=$(LDSONAME) --build-arg=UBI_VERSION=$* -t $(CALICO_BASE):$*-latest-$(ARCH) -f calico-base/Dockerfile calico-base/
 	$(MAKE) BUILD_IMAGES=$(CALICO_BASE) retag-build-images-with-registries VALIDARCHES=$(ARCH) LATEST_IMAGE_TAG=$*-latest IMAGETAG=$*-latest
 
@@ -72,7 +104,7 @@ calico-base-cd: calico-base-image-all var-require-one-of-CONFIRM-DRYRUN var-requ
 CALICO_GO_BUILD_IMAGETAG ?= latest
 
 .PHONY: calico-go-build-image
-calico-go-build-image: register build
+calico-go-build-image: register build | $(CACHE_BUILDER)
 	$(DOCKER_BUILD) -t $(CALICO_GO_BUILD):latest-$(ARCH) -f calico-go-build/Dockerfile calico-go-build/
 	$(MAKE) BUILD_IMAGES=$(CALICO_GO_BUILD) retag-build-images-with-registries VALIDARCHES=$(ARCH) IMAGETAG=$(CALICO_GO_BUILD_IMAGETAG)
 
@@ -105,7 +137,7 @@ CALICO_BINFMT_IMAGETAG ?= qemu-v$(QEMU_VERSION)
 
 # We only build for amd64 architecture because our CI/CD runners are x86_64.
 .PHONY: calico-binfmt-image
-calico-binfmt-image: build
+calico-binfmt-image: build | $(CACHE_BUILDER)
 	$(DOCKER_BUILD) --build-arg QEMU_VERSION=$(QEMU_VERSION) -t $(CALICO_BINFMT):$(CALICO_BINFMT_IMAGETAG)-amd64 -f calico-binfmt/Dockerfile calico-binfmt/
 	$(MAKE) BUILD_IMAGES=$(CALICO_BINFMT) retag-build-images-with-registries VALIDARCHES=amd64 LATEST_IMAGE_TAG=$(CALICO_BINFMT_IMAGETAG) IMAGETAG=$(CALICO_BINFMT_IMAGETAG)
 
@@ -121,7 +153,7 @@ CALICO_SCRATCH_UTILS_IMAGETAG ?= $(shell yq -r '.scratch-utils.version' calico-s
 
 # amd64 only, like binfmt: the runners and the GCE VMs are x86_64.
 .PHONY: calico-scratch-utils-image
-calico-scratch-utils-image: scratch-utils-build
+calico-scratch-utils-image: scratch-utils-build | $(CACHE_BUILDER)
 	$(DOCKER_BUILD) -t $(CALICO_SCRATCH_UTILS):$(CALICO_SCRATCH_UTILS_IMAGETAG)-amd64 -f calico-scratch-utils/Dockerfile calico-scratch-utils/
 	$(MAKE) BUILD_IMAGES=$(CALICO_SCRATCH_UTILS) retag-build-images-with-registries VALIDARCHES=amd64 LATEST_IMAGE_TAG=$(CALICO_SCRATCH_UTILS_IMAGETAG) IMAGETAG=$(CALICO_SCRATCH_UTILS_IMAGETAG)
 
@@ -145,7 +177,7 @@ CALICO_SIGNING_TOOLS_IMAGETAG ?= $(shell yq -r '.signing-tools.version' $(SIGNIN
 # amd64 only: the release runners are x86_64, and versions.yaml pins amd64 checksums.
 .PHONY: calico-signing-tools-image
 calico-signing-tools-image: override ARCH=amd64
-calico-signing-tools-image:
+calico-signing-tools-image: | $(CACHE_BUILDER)
 	$(DOCKER_BUILD) \
 		--build-arg COSIGN_VERSION=$(shell yq -r '.cosign.version' $(SIGNING_TOOLS_VERSIONS)) \
 		--build-arg COSIGN_SHA256=$(shell yq -r '.cosign.checksum.sha256.amd64' $(SIGNING_TOOLS_VERSIONS)) \
@@ -165,7 +197,7 @@ calico-signing-tools-cd: calico-signing-tools-image var-require-one-of-CONFIRM-D
 CALICO_RUST_BUILD_IMAGETAG ?= latest
 
 .PHONY: calico-rust-build-image
-calico-rust-build-image: register
+calico-rust-build-image: register | $(CACHE_BUILDER)
 	$(DOCKER_BUILD) -t $(CALICO_RUST_BUILD):latest-$(ARCH) -f calico-rust-build/Dockerfile calico-rust-build/
 	$(MAKE) BUILD_IMAGES=$(CALICO_RUST_BUILD) retag-build-images-with-registries VALIDARCHES=$(ARCH) IMAGETAG=$(CALICO_RUST_BUILD_IMAGETAG)
 
@@ -190,7 +222,7 @@ push-calico-rust-build-manifests: var-require-one-of-CONFIRM-DRYRUN var-require-
 CALICO_TINYGO_IMAGETAG ?= latest
 
 .PHONY: calico-tinygo-image
-calico-tinygo-image: register
+calico-tinygo-image: register | $(CACHE_BUILDER)
 	$(DOCKER_BUILD) -t $(CALICO_TINYGO):latest-$(ARCH) -f calico-tinygo/Dockerfile calico-tinygo/
 	$(MAKE) BUILD_IMAGES=$(CALICO_TINYGO) retag-build-images-with-registries VALIDARCHES=$(ARCH) IMAGETAG=$(CALICO_TINYGO_IMAGETAG)
 
