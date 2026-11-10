@@ -16,6 +16,7 @@ execution_time_limit:
 global_job_config:
   secrets:
     - name: docker-hub
+    - name: projectcalico-toolchain-s3-secrets
   prologue:
     commands:
       - echo $DOCKERHUB_PASSWORD | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
