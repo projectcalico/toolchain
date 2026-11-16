@@ -46,6 +46,8 @@ type Config struct {
 type Client struct {
 	svc     *compute.Service
 	project string
+	// zoneTimeout overrides PerZoneTimeout, for tests.
+	zoneTimeout time.Duration
 }
 
 // New builds a client using Application Default Credentials. Point
@@ -90,11 +92,19 @@ func (c *Client) Create(ctx context.Context, cfg Config) (zone string, err error
 				continue
 			}
 			fmt.Fprintf(os.Stderr, "[gce] trying %s as %s in %s\n", cfg.Name, mt, z)
-			if err := c.createInZone(ctx, z, mt, cfg); err != nil {
-				errs = append(errs, fmt.Errorf("%s: %w", attempt, err))
-				continue
+			err := c.createInZone(ctx, z, mt, cfg)
+			if err == nil {
+				return z, nil
 			}
-			return z, nil
+			// GCE holds a name across a region's zones, so an earlier zone's insert
+			// that landed after we gave up on it fails every later zone. That
+			// machine is the one this create asked for.
+			if isAlreadyExists(err) {
+				if live, ok := c.adopt(ctx, cfg.Name); ok {
+					return live, nil
+				}
+			}
+			errs = append(errs, fmt.Errorf("%s: %w", attempt, err))
 		}
 	}
 	return "", fmt.Errorf("could not create %s in any zone: %w", cfg.Name, errors.Join(errs...))
@@ -112,7 +122,11 @@ func (cfg Config) machineTypes() []string {
 
 // createInZone attempts one zone under its own deadline.
 func (c *Client) createInZone(ctx context.Context, zone, machineType string, cfg Config) error {
-	zctx, cancel := context.WithTimeout(ctx, PerZoneTimeout)
+	timeout := PerZoneTimeout
+	if c.zoneTimeout > 0 {
+		timeout = c.zoneTimeout
+	}
+	zctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	op, err := c.svc.Instances.Insert(c.project, zone, c.instanceSpec(zone, machineType, cfg)).Context(zctx).Do()
@@ -120,12 +134,44 @@ func (c *Client) createInZone(ctx context.Context, zone, machineType string, cfg
 		return fmt.Errorf("insert: %w", err)
 	}
 	if err := c.waitZoneOp(zctx, zone, op.Name); err != nil {
+		// Only a slow operation, not a failed one: the machine may be up regardless,
+		// and it would hold the name against every other zone.
+		if zctx.Err() != nil && c.liveIn(zone, cfg.Name) {
+			fmt.Fprintf(os.Stderr, "[gce] insert of %s in %s outlived its deadline, but the machine exists; using it\n", cfg.Name, zone)
+			return nil
+		}
 		// The insert was accepted, so an instance may exist. Left behind it would run
 		// to max-run-duration while we boot another elsewhere -- two VMs for one job.
 		c.deleteBestEffort(zone, cfg.Name)
 		return fmt.Errorf("wait for insert: %w", err)
 	}
 	return nil
+}
+
+// liveIn reports whether the named instance exists in zone and is not going away.
+// Create does not wait for the machine to be usable either, so one still
+// provisioning counts. Its own context: the caller's has typically expired.
+func (c *Client) liveIn(zone, name string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), CleanupTimeout)
+	defer cancel()
+	var inst *compute.Instance
+	if err := retry(ctx, "get "+name, func() (err error) {
+		inst, err = c.svc.Instances.Get(c.project, zone, name).Context(ctx).Do()
+		return err
+	}); err != nil {
+		return false
+	}
+	return !goingAway(inst.Status)
+}
+
+// adopt returns the zone of the one live instance of this name, if there is one.
+func (c *Client) adopt(ctx context.Context, name string) (string, bool) {
+	zone, err := c.FindLiveZone(ctx, name)
+	if err != nil || zone == "" {
+		return "", false
+	}
+	fmt.Fprintf(os.Stderr, "[gce] %s already exists in %s, from an earlier attempt; using it\n", name, zone)
+	return zone, true
 }
 
 // CleanupTimeout bounds the synchronous delete a timed-out zone performs. Exported
@@ -333,6 +379,12 @@ func sourceImage(cfg Config) string {
 		return fmt.Sprintf("projects/%s/global/images/%s", cfg.ImageProject, cfg.Image)
 	}
 	return fmt.Sprintf("projects/%s/global/images/family/%s", cfg.ImageProject, cfg.ImageFamily)
+}
+
+// isAlreadyExists reports a 409 from the compute API.
+func isAlreadyExists(err error) bool {
+	var gerr *googleapi.Error
+	return errors.As(err, &gerr) && gerr.Code == http.StatusConflict
 }
 
 // isNotFound reports a 404 from the compute API. Matching the status beats
