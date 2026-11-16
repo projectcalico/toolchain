@@ -16,13 +16,15 @@ build:
 	cp ../cmd/bin/binfmt-$(ARCH) calico-binfmt/bin/binfmt-$(ARCH)
 	cp ../cmd/bin/semvalidator-$(ARCH) calico-go-build/bin/semvalidator-$(ARCH)
 
-# Separate so the go-build and binfmt images do not compile the GCP SDK to build
-# a binary they never contain.
+# Separate so the binfmt image does not compile the GCP SDK to build a binary it
+# never contains. go-build ships it too, so a CI step that already runs in go-build
+# can drive a VM without a scratch-utils container of its own.
 .PHONY: scratch-utils-build
 scratch-utils-build:
 	$(MAKE) -C ../cmd scratch-utils-build
-	mkdir -p calico-scratch-utils/bin/
+	mkdir -p calico-scratch-utils/bin/ calico-go-build/bin/
 	cp ../cmd/bin/scratch-utils-$(ARCH) calico-scratch-utils/bin/scratch-utils-$(ARCH)
+	cp ../cmd/bin/scratch-utils-$(ARCH) calico-go-build/bin/scratch-utils-$(ARCH)
 
 .PHONY: image
 image: calico-base-image calico-binfmt-image calico-go-build-image calico-rust-build-image calico-tinygo-image calico-scratch-utils-image calico-signing-tools-image
@@ -72,7 +74,7 @@ calico-base-cd: calico-base-image-all var-require-one-of-CONFIRM-DRYRUN var-requ
 CALICO_GO_BUILD_IMAGETAG ?= latest
 
 .PHONY: calico-go-build-image
-calico-go-build-image: register build
+calico-go-build-image: register build scratch-utils-build
 	$(DOCKER_BUILD) -t $(CALICO_GO_BUILD):latest-$(ARCH) -f calico-go-build/Dockerfile calico-go-build/
 	$(MAKE) BUILD_IMAGES=$(CALICO_GO_BUILD) retag-build-images-with-registries VALIDARCHES=$(ARCH) IMAGETAG=$(CALICO_GO_BUILD_IMAGETAG)
 
