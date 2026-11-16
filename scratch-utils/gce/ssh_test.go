@@ -5,7 +5,6 @@ package gce
 import (
 	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"io"
 	"os"
 	"os/exec"
@@ -105,8 +104,7 @@ func TestUntarCreatesDestination(t *testing.T) {
 func tarWith(t *testing.T, name, content string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gz)
+	tw := tar.NewWriter(&buf)
 	hdr := &tar.Header{
 		Name:     name,
 		Mode:     0o644,
@@ -120,9 +118,6 @@ func tarWith(t *testing.T, name, content string) []byte {
 		t.Fatal(err)
 	}
 	if err := tw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := gz.Close(); err != nil {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
@@ -147,12 +142,8 @@ func TestTarDirShipsSymlinksAsLinks(t *testing.T) {
 		t.Fatalf("tarDir with symlinks: %v", err)
 	}
 
-	gz, err := gzip.NewReader(&buf)
-	if err != nil {
-		t.Fatal(err)
-	}
 	got := map[string]*tar.Header{}
-	tr := tar.NewReader(gz)
+	tr := tar.NewReader(&buf)
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -224,10 +215,9 @@ func TestUntarAcceptsEquivalentDestinationSpellings(t *testing.T) {
 		base := t.TempDir()
 		t.Chdir(base)
 
-		// "." is what `tar czf - -C dir .` puts first, and is not an escape.
+		// "." is what `tar cf - -C dir .` puts first, and is not an escape.
 		var buf bytes.Buffer
-		gz := gzip.NewWriter(&buf)
-		tw := tar.NewWriter(gz)
+		tw := tar.NewWriter(&buf)
 		if err := tw.WriteHeader(&tar.Header{Name: ".", Typeflag: tar.TypeDir, Mode: 0o755}); err != nil {
 			t.Fatal(err)
 		}
@@ -240,9 +230,6 @@ func TestUntarAcceptsEquivalentDestinationSpellings(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := tw.Close(); err != nil {
-			t.Fatal(err)
-		}
-		if err := gz.Close(); err != nil {
 			t.Fatal(err)
 		}
 
@@ -289,7 +276,7 @@ func TestPutCommandNeverWidensTheDestination(t *testing.T) {
 				}
 			}
 
-			cmd := exec.Command("bash", "-c", putCommand(dest, tc.mode))
+			cmd := exec.Command("bash", "-c", putCommand(dest, tc.mode, false))
 			cmd.Stdin = strings.NewReader("s3cret")
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("running putCommand: %v: %s", err, out)
@@ -329,7 +316,7 @@ func TestPutCommandQuotesHostilePaths(t *testing.T) {
 	dir := t.TempDir()
 	for _, base := range []string{"a file", "$(touch pwned)", "semi;colon"} {
 		dest := filepath.Join(dir, base)
-		cmd := exec.Command("bash", "-c", putCommand(dest, 0o600))
+		cmd := exec.Command("bash", "-c", putCommand(dest, 0o600, false))
 		cmd.Stdin = strings.NewReader("ok")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("%q: %v: %s", base, err, out)
@@ -355,7 +342,7 @@ func TestPutCommandRejectsADirectoryDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command("bash", "-c", putCommand(dest, 0o600))
+	cmd := exec.Command("bash", "-c", putCommand(dest, 0o600, false))
 	cmd.Stdin = strings.NewReader("payload")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -399,7 +386,7 @@ func TestPutCommandReplacesASymlinkDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command("bash", "-c", putCommand(dest, 0o600))
+	cmd := exec.Command("bash", "-c", putCommand(dest, 0o600, false))
 	cmd.Stdin = strings.NewReader("s3cret")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("running putCommand: %v: %s", err, out)
@@ -448,12 +435,8 @@ func TestTarDirFollowsASymlinkedRoot(t *testing.T) {
 
 	// Read the archive directly. untar writes only directories and regular files, so
 	// extracting would not show whether the inner link survived as a link.
-	gz, err := gzip.NewReader(bytes.NewReader(buf.Bytes()))
-	if err != nil {
-		t.Fatal(err)
-	}
 	got := map[string]*tar.Header{}
-	tr := tar.NewReader(gz)
+	tr := tar.NewReader(bytes.NewReader(buf.Bytes()))
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
