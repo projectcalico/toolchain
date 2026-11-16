@@ -57,8 +57,7 @@ RUN set -eux; \
         sudo \
         wget \
         xz \
-        zip \
-        zstd
+        zip
 
 # Install cross-compilation sysroots for arm64, ppc64le, and s390x (amd64 only).
 # This enables native-speed Go+CGO cross-compilation instead of QEMU emulation,
