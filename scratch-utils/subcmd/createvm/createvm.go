@@ -67,17 +67,33 @@ func run(ctx context.Context) error {
 	if len(zones) == 0 {
 		return fmt.Errorf("GOOGLE_VM_ZONES is empty")
 	}
+	// A list, for falling back when one type is out of capacity; the single-type
+	// variable is the default when it is unset.
+	machineTypes := strings.Fields(os.Getenv("GOOGLE_VM_MACHINE_TYPES"))
+	if len(machineTypes) == 0 {
+		machineTypes = []string{util.EnvOr("GOOGLE_VM_MACHINE_TYPE", "n2-standard-16")}
+	}
+	iops, err := parseOptionalCount("GOOGLE_VM_DISK_PROVISIONED_IOPS")
+	if err != nil {
+		return err
+	}
+	throughput, err := parseOptionalCount("GOOGLE_VM_DISK_PROVISIONED_THROUGHPUT")
+	if err != nil {
+		return err
+	}
 	// Bound the whole create so an operation that never reaches DONE fails the step
 	// instead of hanging it until the workflow's own timeout.
-	ctx, cancel := context.WithTimeout(ctx, overallTimeout(len(zones)))
+	ctx, cancel := context.WithTimeout(ctx, overallTimeout(len(machineTypes)*len(zones)))
 	defer cancel()
 
 	cfg := gce.Config{
-		Name:        name,
-		Zones:       zones,
-		MachineType: util.EnvOr("GOOGLE_VM_MACHINE_TYPE", "n2-standard-16"),
-		DiskType:    util.EnvOr("GOOGLE_VM_DISK_TYPE", "pd-ssd"),
-		DiskSizeGB:  diskGB,
+		Name:                      name,
+		Zones:                     zones,
+		MachineTypes:              machineTypes,
+		DiskType:                  util.EnvOr("GOOGLE_VM_DISK_TYPE", "pd-ssd"),
+		DiskSizeGB:                diskGB,
+		DiskProvisionedIops:       iops,
+		DiskProvisionedThroughput: throughput,
 		// ci-base has the toolchain baked in (built by vm-images/ci-base/build-image.sh), so
 		// the VM boots ready and the job does no installs. Override for stock Ubuntu.
 		// GOOGLE_VM_IMAGE pins one exact image (e.g.
@@ -98,7 +114,7 @@ func run(ctx context.Context) error {
 	if cfg.Image != "" {
 		from = "image " + cfg.Image
 	}
-	fmt.Printf("[createvm] creating %s (%s) from %s in %s across %v\n", name, cfg.MachineType, from, project, cfg.Zones)
+	fmt.Printf("[createvm] creating %s (%v) from %s in %s across %v\n", name, cfg.MachineTypes, from, project, cfg.Zones)
 	zone, err := client.Create(ctx, cfg)
 	if err != nil {
 		return err
@@ -142,9 +158,26 @@ func parseDiskGB(s string) (int64, error) {
 	return n, nil
 }
 
-// overallTimeout budgets every zone a full attempt. A timed-out zone then deletes the
-// abandoned VM synchronously, so it costs PerZoneTimeout + CleanupTimeout; counting
-// only the former left the last zone unattempted. The minute covers client setup.
-func overallTimeout(zones int) time.Duration {
-	return time.Duration(zones)*(gce.PerZoneTimeout+gce.CleanupTimeout) + time.Minute
+// parseOptionalCount reads a positive integer from env var name; unset or empty is
+// zero, which leaves the setting to GCE.
+func parseOptionalCount(name string) (int64, error) {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s %q: want a whole number: %w", name, v, err)
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("%s %q: must be positive", name, v)
+	}
+	return n, nil
+}
+
+// overallTimeout budgets every machine-type-and-zone attempt in full. A timed-out
+// attempt then deletes the abandoned VM synchronously, so it costs PerZoneTimeout +
+// CleanupTimeout; counting only the former left the last attempt unmade. The minute covers client setup.
+func overallTimeout(attempts int) time.Duration {
+	return time.Duration(attempts)*(gce.PerZoneTimeout+gce.CleanupTimeout) + time.Minute
 }

@@ -19,26 +19,35 @@ import (
 	"google.golang.org/api/googleapi"
 )
 
-// Config describes the VM to create. Zones are tried in order (capacity), and the
-// first that succeeds is returned. The project is the Client's, not a field here.
+// Config describes the VM to create. Each machine type is tried in every zone, in
+// order, and the first that succeeds is returned: capacity runs out by type as well
+// as by zone. The project is the Client's, not a field here.
 type Config struct {
-	Name          string
-	Zones         []string
-	MachineType   string // e.g. "n2-standard-16"
-	DiskType      string // e.g. "pd-ssd"
-	DiskSizeGB    int64
-	Image         string // exact image name; wins over ImageFamily when set
-	ImageFamily   string // e.g. "ubuntu-2404-lts-amd64"
-	ImageProject  string // e.g. "ubuntu-os-cloud"
-	MaxRun        time.Duration
-	Labels        map[string]string
-	StartupScript string // bash run as the GCE startup-script (on the VM)
+	Name  string
+	Zones []string
+	// MachineTypes wins over MachineType when set.
+	MachineTypes []string
+	MachineType  string // e.g. "n2-standard-16"
+	DiskType     string // e.g. "pd-ssd"
+	DiskSizeGB   int64
+	// Hyperdisk only; zero leaves the disk type's own default. A hyperdisk's
+	// performance is provisioned rather than scaled with its size.
+	DiskProvisionedIops       int64
+	DiskProvisionedThroughput int64
+	Image                     string // exact image name; wins over ImageFamily when set
+	ImageFamily               string // e.g. "ubuntu-2404-lts-amd64"
+	ImageProject              string // e.g. "ubuntu-os-cloud"
+	MaxRun                    time.Duration
+	Labels                    map[string]string
+	StartupScript             string // bash run as the GCE startup-script (on the VM)
 }
 
 // Client is a compute API client scoped to one project.
 type Client struct {
 	svc     *compute.Service
 	project string
+	// zoneTimeout overrides PerZoneTimeout, for tests.
+	zoneTimeout time.Duration
 }
 
 // New builds a client using Application Default Credentials. Point
@@ -58,47 +67,111 @@ func New(ctx context.Context, project string) (*Client, error) {
 // to finish it.
 const PerZoneTimeout = 3 * time.Minute
 
-// Create inserts the instance in the first zone that accepts it and returns that
-// zone. The VM gets an external IP, cloud-platform scope, and a max-run-duration
-// GCP reclaims it at -- eventually, since that reclaim is itself an operation and
-// can queue behind a wedged insert. Every zone's error is reported, not just the
-// last.
+// Create inserts the instance with the first machine type and zone that accepts it
+// and returns that zone. The VM gets an external IP, cloud-platform scope, and a
+// max-run-duration GCP reclaims it at -- eventually, since that reclaim is itself an
+// operation and can queue behind a wedged insert. Every attempt's error is
+// reported, not just the last.
 func (c *Client) Create(ctx context.Context, cfg Config) (zone string, err error) {
 	if len(cfg.Zones) == 0 {
 		return "", fmt.Errorf("no zones configured")
 	}
+	types := cfg.machineTypes()
+	if len(types) == 0 {
+		return "", fmt.Errorf("no machine type configured")
+	}
 	var errs []error
-	for _, z := range cfg.Zones {
-		if err := ctx.Err(); err != nil {
-			errs = append(errs, fmt.Errorf("%s: not attempted: %w", z, err))
-			continue
+	for _, mt := range types {
+		for _, z := range cfg.Zones {
+			attempt := z
+			if len(types) > 1 {
+				attempt = mt + " in " + z
+			}
+			if err := ctx.Err(); err != nil {
+				errs = append(errs, fmt.Errorf("%s: not attempted: %w", attempt, err))
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "[gce] trying %s as %s in %s\n", cfg.Name, mt, z)
+			err := c.createInZone(ctx, z, mt, cfg)
+			if err == nil {
+				return z, nil
+			}
+			// GCE holds a name across a region's zones, so an earlier zone's insert
+			// that landed after we gave up on it fails every later zone. That
+			// machine is the one this create asked for.
+			if isAlreadyExists(err) {
+				if live, ok := c.adopt(ctx, cfg.Name); ok {
+					return live, nil
+				}
+			}
+			errs = append(errs, fmt.Errorf("%s: %w", attempt, err))
 		}
-		fmt.Fprintf(os.Stderr, "[gce] trying %s in %s\n", cfg.Name, z)
-		if err := c.createInZone(ctx, z, cfg); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", z, err))
-			continue
-		}
-		return z, nil
 	}
 	return "", fmt.Errorf("could not create %s in any zone: %w", cfg.Name, errors.Join(errs...))
 }
 
+func (cfg Config) machineTypes() []string {
+	if len(cfg.MachineTypes) > 0 {
+		return cfg.MachineTypes
+	}
+	if cfg.MachineType == "" {
+		return nil
+	}
+	return []string{cfg.MachineType}
+}
+
 // createInZone attempts one zone under its own deadline.
-func (c *Client) createInZone(ctx context.Context, zone string, cfg Config) error {
-	zctx, cancel := context.WithTimeout(ctx, PerZoneTimeout)
+func (c *Client) createInZone(ctx context.Context, zone, machineType string, cfg Config) error {
+	timeout := PerZoneTimeout
+	if c.zoneTimeout > 0 {
+		timeout = c.zoneTimeout
+	}
+	zctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	op, err := c.svc.Instances.Insert(c.project, zone, c.instanceSpec(zone, cfg)).Context(zctx).Do()
+	op, err := c.svc.Instances.Insert(c.project, zone, c.instanceSpec(zone, machineType, cfg)).Context(zctx).Do()
 	if err != nil {
 		return fmt.Errorf("insert: %w", err)
 	}
 	if err := c.waitZoneOp(zctx, zone, op.Name); err != nil {
+		// Only a slow operation, not a failed one: the machine may be up regardless,
+		// and it would hold the name against every other zone.
+		if zctx.Err() != nil && c.liveIn(zone, cfg.Name) {
+			fmt.Fprintf(os.Stderr, "[gce] insert of %s in %s outlived its deadline, but the machine exists; using it\n", cfg.Name, zone)
+			return nil
+		}
 		// The insert was accepted, so an instance may exist. Left behind it would run
 		// to max-run-duration while we boot another elsewhere -- two VMs for one job.
 		c.deleteBestEffort(zone, cfg.Name)
 		return fmt.Errorf("wait for insert: %w", err)
 	}
 	return nil
+}
+
+// liveIn reports whether the named instance exists in zone and is not going away.
+// Create does not wait for the machine to be usable either, so one still
+// provisioning counts. Its own context: the caller's has typically expired.
+func (c *Client) liveIn(zone, name string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), CleanupTimeout)
+	defer cancel()
+	var inst *compute.Instance
+	if err := retry(ctx, "get "+name, func() (err error) {
+		inst, err = c.svc.Instances.Get(c.project, zone, name).Context(ctx).Do()
+		return err
+	}); err != nil {
+		return false
+	}
+	return !goingAway(inst.Status)
+}
+
+// adopt returns the zone of the one live instance of this name, if there is one.
+func (c *Client) adopt(ctx context.Context, name string) (string, bool) {
+	zone, err := c.FindLiveZone(ctx, name)
+	if err != nil || zone == "" {
+		return "", false
+	}
+	fmt.Fprintf(os.Stderr, "[gce] %s already exists in %s, from an earlier attempt; using it\n", name, zone)
+	return zone, true
 }
 
 // CleanupTimeout bounds the synchronous delete a timed-out zone performs. Exported
@@ -116,18 +189,20 @@ func (c *Client) deleteBestEffort(zone, name string) {
 	}
 }
 
-func (c *Client) instanceSpec(zone string, cfg Config) *compute.Instance {
+func (c *Client) instanceSpec(zone, machineType string, cfg Config) *compute.Instance {
 	inst := &compute.Instance{
 		Name:        cfg.Name,
-		MachineType: fmt.Sprintf("zones/%s/machineTypes/%s", zone, cfg.MachineType),
+		MachineType: fmt.Sprintf("zones/%s/machineTypes/%s", zone, machineType),
 		Labels:      cfg.Labels,
 		Disks: []*compute.AttachedDisk{{
 			Boot:       true,
 			AutoDelete: true,
 			InitializeParams: &compute.AttachedDiskInitializeParams{
-				SourceImage: sourceImage(cfg),
-				DiskSizeGb:  cfg.DiskSizeGB,
-				DiskType:    fmt.Sprintf("zones/%s/diskTypes/%s", zone, cfg.DiskType),
+				SourceImage:           sourceImage(cfg),
+				DiskSizeGb:            cfg.DiskSizeGB,
+				DiskType:              fmt.Sprintf("zones/%s/diskTypes/%s", zone, cfg.DiskType),
+				ProvisionedIops:       cfg.DiskProvisionedIops,
+				ProvisionedThroughput: cfg.DiskProvisionedThroughput,
 			},
 		}},
 		// One NAT access config = an ephemeral external IP (SSH from the run step).
@@ -304,6 +379,12 @@ func sourceImage(cfg Config) string {
 		return fmt.Sprintf("projects/%s/global/images/%s", cfg.ImageProject, cfg.Image)
 	}
 	return fmt.Sprintf("projects/%s/global/images/family/%s", cfg.ImageProject, cfg.ImageFamily)
+}
+
+// isAlreadyExists reports a 409 from the compute API.
+func isAlreadyExists(err error) bool {
+	var gerr *googleapi.Error
+	return errors.As(err, &gerr) && gerr.Code == http.StatusConflict
 }
 
 // isNotFound reports a 404 from the compute API. Matching the status beats
