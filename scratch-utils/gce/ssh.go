@@ -20,6 +20,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -239,19 +240,19 @@ func (s *SSH) PutData(data []byte, remote string, mode os.FileMode) error {
 
 // putCommand writes stdin to remote at mode, staged through a 0600 mktemp file in the
 // same directory. Writing remote directly creates it at the shell's umask and narrows
-// it only afterwards, exposing a secret for the length of the upload. With zstd set,
-// stdin is a zstd stream that lands decompressed.
+// it only afterwards, exposing a secret for the length of the upload. With compressed
+// set, stdin is a zstd stream that lands decompressed.
 //
 // -T is load-bearing: plain `mv -f tmp dir` moves the payload *into* an existing
 // directory and exits 0. It also replaces a destination symlink rather than writing
 // through it. GNU coreutils, which is what the VM runs.
-func putCommand(remote string, mode os.FileMode, zstd bool) string {
+func putCommand(remote string, mode os.FileMode, compressed bool) string {
 	// Single-quoted, not %q: %q is double-quoted, and bash expands $(...) inside
 	// double quotes, so a crafted remote path would execute on the VM.
 	q := util.ShellQuote(remote)
 	qd := util.ShellQuote(filepath.Dir(remote))
 	write := "cat"
-	if zstd {
+	if compressed {
 		write = "zstd -dcq"
 	}
 	return fmt.Sprintf(
@@ -321,14 +322,26 @@ func (s *SSH) runWithInput(cmd string, raw bool, write func(io.Writer) error) er
 	writeErr := make(chan error, 1)
 	go func() {
 		err := writeStream(pw, raw, write)
-		pw.CloseWithError(err)
+		// Recorded before the close that ends the remote's input, so it is there
+		// by the time Run returns.
 		writeErr <- err
+		pw.CloseWithError(err)
 	}()
 	// Captured so a failing remote command says why.
 	var errBuf bytes.Buffer
 	sess.Stderr = &errBuf
 	if err := sess.Run(cmd); err != nil {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(errBuf.String()))
+		remote := fmt.Errorf("%w: %s", err, strings.TrimSpace(errBuf.String()))
+		// A local failure cuts the stream short, so the remote end then fails too,
+		// on input that says nothing of why. Report the local one when there is one.
+		select {
+		case werr := <-writeErr:
+			if werr != nil {
+				return fmt.Errorf("%w (remote: %v)", werr, remote)
+			}
+		default:
+		}
+		return remote
 	}
 	// Run returned, so the input is done. An error here means we shipped a
 	// truncated stream the remote accepted without complaint.
@@ -342,15 +355,41 @@ func writeStream(w io.Writer, raw bool, write func(io.Writer) error) error {
 	}
 	// The fastest level: the sending pod is often given a fraction of a core, and
 	// compressing slower than the network turns a saving into a delay.
-	zw, err := zstd.NewWriter(w, zstd.WithEncoderLevel(zstd.SpeedFastest))
+	cw := &cutWriter{w: w}
+	zw, err := zstd.NewWriter(cw, zstd.WithEncoderLevel(zstd.SpeedFastest))
 	if err != nil {
 		return err
 	}
 	if err := write(zw); err != nil {
+		// Closing writes the frame's end and checksum, which would let the remote
+		// decompress what was cut short as if it were whole.
+		cw.cut()
 		zw.Close()
 		return err
 	}
 	return zw.Close()
+}
+
+// cutWriter passes writes through to w until cut, then discards them.
+type cutWriter struct {
+	mu    sync.Mutex
+	w     io.Writer
+	isCut bool
+}
+
+func (c *cutWriter) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.isCut {
+		return len(p), nil
+	}
+	return c.w.Write(p)
+}
+
+func (c *cutWriter) cut() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.isCut = true
 }
 
 // compressedMagics are the leading bytes of formats that a second pass of zstd
@@ -446,7 +485,9 @@ func (s *SSH) GetDir(remoteDir, localDir string) error {
 	if err := sess.Start(getCommand(remoteDir)); err != nil {
 		return err
 	}
-	zr, err := zstd.NewReader(stdout)
+	// One goroutine: the default decodes ahead in the background, which would read
+	// stdout concurrently with the drain below.
+	zr, err := zstd.NewReader(stdout, zstd.WithDecoderConcurrency(1))
 	if err != nil {
 		return err
 	}
