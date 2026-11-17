@@ -119,6 +119,9 @@ func TestPutDirMergesIntoAnExistingDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	dst := t.TempDir()
+	if err := os.Chmod(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(dst, "kept.txt"), []byte("kept"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -127,6 +130,40 @@ func TestPutDirMergesIntoAnExistingDirectory(t *testing.T) {
 		if got, err := os.ReadFile(filepath.Join(dst, name)); err != nil || string(got) != want {
 			t.Errorf("%s = %q, %v; want %q", name, got, err, want)
 		}
+	}
+	// Others on the VM may need to read it.
+	if fi, err := os.Stat(dst); err != nil || fi.Mode().Perm() != 0o755 {
+		t.Errorf("destination mode = %v, %v; want it left at 0755", fi.Mode().Perm(), err)
+	}
+}
+
+// A file named like a staging file is someone's artifact, not scratch space.
+func TestUntarLeavesAFileNamedLikeItsStaging(t *testing.T) {
+	var archive bytes.Buffer
+	tw := tar.NewWriter(&archive)
+	if err := tw.WriteHeader(&tar.Header{Name: "report.xml", Mode: 0o644, Size: 3, Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dst, "report.xml.partial"), []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := untar(&archive, dst); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"report.xml": "new", "report.xml.partial": "mine"} {
+		if got, err := os.ReadFile(filepath.Join(dst, name)); err != nil || string(got) != want {
+			t.Errorf("%s = %q, %v; want %q", name, got, err, want)
+		}
+	}
+	if entries, _ := os.ReadDir(dst); len(entries) != 2 {
+		t.Errorf("%d entries, want no staging file left behind", len(entries))
 	}
 }
 

@@ -285,7 +285,8 @@ func (s *SSH) PutDir(localDir, remoteDir string) error {
 // putDirCommand extracts stdin, a zstd tar, into a staging directory beside
 // remoteDir, so a stream cut short leaves nothing at remoteDir: extracting in place
 // kept every entry before the cut, the last one truncated. A new remoteDir is the
-// staging directory renamed; an existing one gets its contents copied in. tar runs
+// staging directory renamed; an existing one gets the staged entries copied in,
+// not the staging directory itself, whose 0700 would replace its mode. tar runs
 // the decompressor itself, so a corrupt stream fails the command rather than
 // vanishing into a pipeline's exit status.
 func putDirCommand(remoteDir string) string {
@@ -295,7 +296,7 @@ func putDirCommand(remoteDir string) string {
 		`mkdir -p %s && t="$(mktemp -d %s/.putdir.XXXXXX)" && trap 'rm -rf "$t"' EXIT && `+
 			`tar --zstd -xf - -C "$t" && `+
 			// mktemp's 0700 would otherwise become the new directory's mode.
-			`if [ -e %s ]; then cp -a "$t/." %s/; else chmod u=rwx,go=rx "$t" && mv -T -- "$t" %s && trap - EXIT; fi`,
+			`if [ -e %s ]; then find "$t" -mindepth 1 -maxdepth 1 -exec cp -a -t %s/ {} +; else chmod u=rwx,go=rx "$t" && mv -T -- "$t" %s && trap - EXIT; fi`,
 		qd, qd, q, q, q)
 }
 
@@ -542,8 +543,10 @@ func untar(r io.Reader, destDir string) error {
 			}
 			// Written aside and renamed once whole, so a stream that breaks mid-file
 			// leaves neither a truncated file under the real name nor a clobbered one.
-			partial := name + ".partial"
-			f, err := root.OpenFile(partial, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(hdr.Mode))
+			// The name is random and created exclusively, so it can't be an artifact
+			// already there, or another download's.
+			partial := path.Join(path.Dir(name), ".untar-"+rand.Text())
+			f, err := root.OpenFile(partial, os.O_CREATE|os.O_EXCL|os.O_WRONLY, os.FileMode(hdr.Mode))
 			if err != nil {
 				return err
 			}
