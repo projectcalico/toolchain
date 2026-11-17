@@ -70,7 +70,7 @@ func TestSSHRunWithInputReportsTheLocalFailure(t *testing.T) {
 	conn := testSSH(t)
 	dest := filepath.Join(t.TempDir(), "payload")
 	errDisk := errors.New("disk read failed")
-	err := conn.runWithInput(putCommand(dest, 0o644, true), false, func(w io.Writer) error {
+	err := conn.runWithInput(putCommand(dest, 0o644), func(w io.Writer) error {
 		if _, err := w.Write(bytes.Repeat([]byte("x"), 1<<20)); err != nil {
 			return err
 		}
@@ -107,6 +107,24 @@ func TestSSHGetDirFailsCleanly(t *testing.T) {
 	}
 	if err := conn.GetDir(remote, local); err == nil {
 		t.Fatal("GetDir into a read-only destination succeeded")
+	}
+}
+
+// A remote tar that fails says why, not only its exit status.
+func TestSSHGetDirSaysWhyTheRemoteFailed(t *testing.T) {
+	needZstd(t)
+	if os.Geteuid() == 0 {
+		t.Skip("root reads the unreadable file")
+	}
+	conn := testSSH(t)
+	remote := t.TempDir()
+	secret := filepath.Join(remote, "unreadable.txt")
+	if err := os.WriteFile(secret, []byte("x"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	err := conn.GetDir(remote, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "unreadable.txt") {
+		t.Fatalf("error = %v, want the remote tar's own message naming the file", err)
 	}
 }
 
