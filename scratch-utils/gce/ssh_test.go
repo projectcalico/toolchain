@@ -469,6 +469,7 @@ func TestGetCommandForgivesOnlyAMissingDirectory(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
+	needZstd(t)
 	run := func(dir string) (int, int) {
 		t.Helper()
 		cmd := exec.Command("bash", "-c", getCommand(dir))
