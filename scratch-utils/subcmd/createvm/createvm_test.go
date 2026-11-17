@@ -137,3 +137,29 @@ func TestParseOptionalCount(t *testing.T) {
 		}
 	}
 }
+
+func TestParseLabelsLetsTheCallerOverrideDefaults(t *testing.T) {
+	got, err := parseLabels("ci-provider=argoci, ci-workflow-id=calico-14503-pr-lqlkf,ci-project=calico,ci-cron=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{
+		"ci-runner":      "true",
+		"ci-provider":    "argoci",
+		"ci-workflow-id": "calico-14503-pr-lqlkf",
+		"ci-project":     "calico",
+		"ci-cron":        "",
+	} {
+		if v, ok := got[key]; !ok || v != want {
+			t.Errorf("label %s = %q (present %v), want %q", key, v, ok, want)
+		}
+	}
+}
+
+func TestParseLabelsRejectsWhatGCEWould(t *testing.T) {
+	for _, in := range []string{"noequals", "Ci-step=x", "ci-step=Node", "ci-step=a.b", "=x", "ci-step=" + strings.Repeat("a", 64)} {
+		if _, err := parseLabels(in); err == nil {
+			t.Errorf("parseLabels(%q) accepted a label GCE would refuse", in)
+		}
+	}
+}

@@ -164,3 +164,14 @@ func TestCreateDoesNotAdoptADyingMachine(t *testing.T) {
 		t.Errorf("zone = %q, want the next zone rather than the dying machine", zone)
 	}
 }
+
+// Billing reports a disk under its own labels, so an unlabelled boot disk is
+// cost no run is charged for.
+func TestBootDiskCarriesTheInstanceLabels(t *testing.T) {
+	labels := map[string]string{"ci-provider": "argoci", "ci-workflow-id": "wf"}
+	inst := (&Client{project: "p"}).instanceSpec("z-a", "t", Config{Name: "vm", DiskType: "pd-ssd", Labels: labels})
+	got := inst.Disks[0].InitializeParams.Labels
+	if len(got) != len(labels) || got["ci-workflow-id"] != "wf" {
+		t.Errorf("boot disk labels = %v, want %v", got, labels)
+	}
+}

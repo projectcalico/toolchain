@@ -203,6 +203,8 @@ func (c *Client) instanceSpec(zone, machineType string, cfg Config) *compute.Ins
 				DiskType:              fmt.Sprintf("zones/%s/diskTypes/%s", zone, cfg.DiskType),
 				ProvisionedIops:       cfg.DiskProvisionedIops,
 				ProvisionedThroughput: cfg.DiskProvisionedThroughput,
+				// Billing reports a disk under its own labels, not its instance's.
+				Labels: cfg.Labels,
 			},
 		}},
 		// One NAT access config = an ephemeral external IP (SSH from the run step).
