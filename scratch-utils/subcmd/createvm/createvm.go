@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -81,6 +82,10 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	labels, err := parseLabels(os.Getenv("GOOGLE_VM_LABELS"))
+	if err != nil {
+		return err
+	}
 	// Bound the whole create so an operation that never reaches DONE fails the step
 	// instead of hanging it until the workflow's own timeout.
 	ctx, cancel := context.WithTimeout(ctx, overallTimeout(len(machineTypes)*len(zones)))
@@ -103,11 +108,7 @@ func run(ctx context.Context) error {
 		ImageFamily:  util.EnvOr("GOOGLE_VM_IMAGE_FAMILY", "ci-base"),
 		ImageProject: util.EnvOr("GOOGLE_VM_IMAGE_PROJECT", "unique-caldron-775"),
 		MaxRun:       maxRun,
-		Labels: map[string]string{
-			"ci-runner":   "true",
-			"ci-project":  "kindrig",
-			"ci-workflow": util.EnvOr("CI_WORKFLOW_LABEL", "unknown"),
-		},
+		Labels:       labels,
 	}
 
 	from := "family " + cfg.ImageFamily
@@ -132,6 +133,38 @@ func run(ctx context.Context) error {
 // than passed on: instanceSpec omits the whole Scheduling block when MaxRun is not
 // positive, so "0s" would create a VM with no deadline at all -- and deletevm
 // returning 0 on any failure assumes that deadline is there to catch it.
+// GCE's rules for a label key and value; a value may be empty.
+var (
+	labelKeyRe   = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
+	labelValueRe = regexp.MustCompile(`^[a-z0-9_-]{0,63}$`)
+)
+
+// parseLabels merges GOOGLE_VM_LABELS ("key=value,key=value") over the defaults.
+// The CI system passes what its billing reports group by, such as the run and
+// step a machine was paid for, so they must already be valid GCE values.
+func parseLabels(s string) (map[string]string, error) {
+	labels := map[string]string{
+		"ci-runner":   "true",
+		"ci-project":  "kindrig",
+		"ci-workflow": util.EnvOr("CI_WORKFLOW_LABEL", "unknown"),
+	}
+	for _, pair := range strings.Split(s, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(pair, "=")
+		if !ok || !labelKeyRe.MatchString(key) || !labelValueRe.MatchString(value) {
+			return nil, fmt.Errorf("GOOGLE_VM_LABELS: %q is not a GCE label (key=value, lowercase letters, digits, - and _)", pair)
+		}
+		labels[key] = value
+	}
+	if len(labels) > 64 {
+		return nil, fmt.Errorf("GOOGLE_VM_LABELS: %d labels, more than the 64 GCE allows", len(labels))
+	}
+	return labels, nil
+}
+
 func parseMaxRun(s string) (time.Duration, error) {
 	d, err := time.ParseDuration(s)
 	if err != nil {
