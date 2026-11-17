@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -67,17 +68,37 @@ func run(ctx context.Context) error {
 	if len(zones) == 0 {
 		return fmt.Errorf("GOOGLE_VM_ZONES is empty")
 	}
+	// A list, for falling back when one type is out of capacity; the single-type
+	// variable is the default when it is unset.
+	machineTypes := strings.Fields(os.Getenv("GOOGLE_VM_MACHINE_TYPES"))
+	if len(machineTypes) == 0 {
+		machineTypes = []string{util.EnvOr("GOOGLE_VM_MACHINE_TYPE", "n2-standard-16")}
+	}
+	iops, err := parseOptionalCount("GOOGLE_VM_DISK_PROVISIONED_IOPS")
+	if err != nil {
+		return err
+	}
+	throughput, err := parseOptionalCount("GOOGLE_VM_DISK_PROVISIONED_THROUGHPUT")
+	if err != nil {
+		return err
+	}
+	labels, err := parseLabels(os.Getenv("GOOGLE_VM_LABELS"))
+	if err != nil {
+		return err
+	}
 	// Bound the whole create so an operation that never reaches DONE fails the step
 	// instead of hanging it until the workflow's own timeout.
-	ctx, cancel := context.WithTimeout(ctx, overallTimeout(len(zones)))
+	ctx, cancel := context.WithTimeout(ctx, overallTimeout(len(machineTypes)*len(zones)))
 	defer cancel()
 
 	cfg := gce.Config{
-		Name:        name,
-		Zones:       zones,
-		MachineType: util.EnvOr("GOOGLE_VM_MACHINE_TYPE", "n2-standard-16"),
-		DiskType:    util.EnvOr("GOOGLE_VM_DISK_TYPE", "pd-ssd"),
-		DiskSizeGB:  diskGB,
+		Name:                      name,
+		Zones:                     zones,
+		MachineTypes:              machineTypes,
+		DiskType:                  util.EnvOr("GOOGLE_VM_DISK_TYPE", "pd-ssd"),
+		DiskSizeGB:                diskGB,
+		DiskProvisionedIops:       iops,
+		DiskProvisionedThroughput: throughput,
 		// ci-base has the toolchain baked in (built by vm-images/ci-base/build-image.sh), so
 		// the VM boots ready and the job does no installs. Override for stock Ubuntu.
 		// GOOGLE_VM_IMAGE pins one exact image (e.g.
@@ -87,18 +108,14 @@ func run(ctx context.Context) error {
 		ImageFamily:  util.EnvOr("GOOGLE_VM_IMAGE_FAMILY", "ci-base"),
 		ImageProject: util.EnvOr("GOOGLE_VM_IMAGE_PROJECT", "unique-caldron-775"),
 		MaxRun:       maxRun,
-		Labels: map[string]string{
-			"ci-runner":   "true",
-			"ci-project":  "kindrig",
-			"ci-workflow": util.EnvOr("CI_WORKFLOW_LABEL", "unknown"),
-		},
+		Labels:       labels,
 	}
 
 	from := "family " + cfg.ImageFamily
 	if cfg.Image != "" {
 		from = "image " + cfg.Image
 	}
-	fmt.Printf("[createvm] creating %s (%s) from %s in %s across %v\n", name, cfg.MachineType, from, project, cfg.Zones)
+	fmt.Printf("[createvm] creating %s (%v) from %s in %s across %v\n", name, cfg.MachineTypes, from, project, cfg.Zones)
 	zone, err := client.Create(ctx, cfg)
 	if err != nil {
 		return err
@@ -116,6 +133,38 @@ func run(ctx context.Context) error {
 // than passed on: instanceSpec omits the whole Scheduling block when MaxRun is not
 // positive, so "0s" would create a VM with no deadline at all -- and deletevm
 // returning 0 on any failure assumes that deadline is there to catch it.
+// GCE's rules for a label key and value; a value may be empty.
+var (
+	labelKeyRe   = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
+	labelValueRe = regexp.MustCompile(`^[a-z0-9_-]{0,63}$`)
+)
+
+// parseLabels merges GOOGLE_VM_LABELS ("key=value,key=value") over the defaults.
+// The CI system passes what its billing reports group by, such as the run and
+// step a machine was paid for, so they must already be valid GCE values.
+func parseLabels(s string) (map[string]string, error) {
+	labels := map[string]string{
+		"ci-runner":   "true",
+		"ci-project":  "kindrig",
+		"ci-workflow": util.EnvOr("CI_WORKFLOW_LABEL", "unknown"),
+	}
+	for _, pair := range strings.Split(s, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(pair, "=")
+		if !ok || !labelKeyRe.MatchString(key) || !labelValueRe.MatchString(value) {
+			return nil, fmt.Errorf("GOOGLE_VM_LABELS: %q is not a GCE label (key=value, lowercase letters, digits, - and _)", pair)
+		}
+		labels[key] = value
+	}
+	if len(labels) > 64 {
+		return nil, fmt.Errorf("GOOGLE_VM_LABELS: %d labels, more than the 64 GCE allows", len(labels))
+	}
+	return labels, nil
+}
+
 func parseMaxRun(s string) (time.Duration, error) {
 	d, err := time.ParseDuration(s)
 	if err != nil {
@@ -142,9 +191,26 @@ func parseDiskGB(s string) (int64, error) {
 	return n, nil
 }
 
-// overallTimeout budgets every zone a full attempt. A timed-out zone then deletes the
-// abandoned VM synchronously, so it costs PerZoneTimeout + CleanupTimeout; counting
-// only the former left the last zone unattempted. The minute covers client setup.
-func overallTimeout(zones int) time.Duration {
-	return time.Duration(zones)*(gce.PerZoneTimeout+gce.CleanupTimeout) + time.Minute
+// parseOptionalCount reads a positive integer from env var name; unset or empty is
+// zero, which leaves the setting to GCE.
+func parseOptionalCount(name string) (int64, error) {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s %q: want a whole number: %w", name, v, err)
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("%s %q: must be positive", name, v)
+	}
+	return n, nil
+}
+
+// overallTimeout budgets every machine-type-and-zone attempt in full. A timed-out
+// attempt then deletes the abandoned VM synchronously, so it costs PerZoneTimeout +
+// CleanupTimeout; counting only the former left the last attempt unmade. The minute covers client setup.
+func overallTimeout(attempts int) time.Duration {
+	return time.Duration(attempts)*(gce.PerZoneTimeout+gce.CleanupTimeout) + time.Minute
 }

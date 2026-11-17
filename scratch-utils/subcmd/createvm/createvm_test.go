@@ -113,3 +113,53 @@ func TestOverallTimeoutLeavesEveryZoneAFullAttempt(t *testing.T) {
 		t.Errorf("four zones: %v < %v", got, want)
 	}
 }
+
+// Unset is "leave it to GCE", which is the only right answer for a pd disk; a
+// zero or garbage value would otherwise reach the API and fail far from its cause.
+func TestParseOptionalCount(t *testing.T) {
+	const name = "TEST_PROVISIONED"
+	for _, tc := range []struct {
+		in      string
+		want    int64
+		wantErr bool
+	}{
+		{"", 0, false},
+		{"10000", 10000, false},
+		{" 200 ", 200, false},
+		{"0", 0, true},
+		{"-5", 0, true},
+		{"10k", 0, true},
+	} {
+		t.Setenv(name, tc.in)
+		got, err := parseOptionalCount(name)
+		if (err != nil) != tc.wantErr || got != tc.want {
+			t.Errorf("parseOptionalCount(%q) = %d, %v; want %d, err=%v", tc.in, got, err, tc.want, tc.wantErr)
+		}
+	}
+}
+
+func TestParseLabelsLetsTheCallerOverrideDefaults(t *testing.T) {
+	got, err := parseLabels("ci-provider=argoci, ci-workflow-id=calico-14503-pr-lqlkf,ci-project=calico,ci-cron=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{
+		"ci-runner":      "true",
+		"ci-provider":    "argoci",
+		"ci-workflow-id": "calico-14503-pr-lqlkf",
+		"ci-project":     "calico",
+		"ci-cron":        "",
+	} {
+		if v, ok := got[key]; !ok || v != want {
+			t.Errorf("label %s = %q (present %v), want %q", key, v, ok, want)
+		}
+	}
+}
+
+func TestParseLabelsRejectsWhatGCEWould(t *testing.T) {
+	for _, in := range []string{"noequals", "Ci-step=x", "ci-step=Node", "ci-step=a.b", "=x", "ci-step=" + strings.Repeat("a", 64)} {
+		if _, err := parseLabels(in); err == nil {
+			t.Errorf("parseLabels(%q) accepted a label GCE would refuse", in)
+		}
+	}
+}
