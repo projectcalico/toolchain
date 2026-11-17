@@ -290,7 +290,7 @@ RUN set -eux; \
     go install k8s.io/code-generator/cmd/defaulter-gen@v${k8s_libs_version} && \
     go install k8s.io/code-generator/cmd/informer-gen@v${k8s_libs_version} && \
     go install k8s.io/code-generator/cmd/lister-gen@v${k8s_libs_version} && \
-    go install k8s.io/kube-openapi/cmd/openapi-gen@v0.0.0-20260721132016-d427ff9ee9ad && \
+    go install k8s.io/kube-openapi/cmd/openapi-gen@v0.0.0-20261014044854-ca3452a79603 && \
     go install mvdan.cc/gofumpt@v0.11.0
 
 # Cleanup module cache after we have built and installed all Go utilities
