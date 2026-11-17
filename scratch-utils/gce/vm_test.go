@@ -53,7 +53,7 @@ func TestSourceImage(t *testing.T) {
 // instanceSpec is what actually reaches the API, so make sure the pin survives it.
 func TestInstanceSpecUsesPinnedImage(t *testing.T) {
 	c := &Client{project: "unique-caldron-775"}
-	inst := c.instanceSpec("us-central1-a", Config{
+	inst := c.instanceSpec("us-central1-a", "n2-standard-16", Config{
 		Name:         "vm",
 		MachineType:  "n2-standard-16",
 		DiskType:     "pd-ssd",
@@ -66,6 +66,69 @@ func TestInstanceSpecUsesPinnedImage(t *testing.T) {
 	want := "projects/unique-caldron-775/global/images/ci-base-1-27-0-llvm21-1-8-k8s1-37-0"
 	if got != want {
 		t.Errorf("SourceImage = %q, want %q", got, want)
+	}
+}
+
+// Hyperdisk performance is provisioned rather than scaled with size, so these are
+// the only way a kind cluster gets the IOPS it wants from one.
+func TestInstanceSpecCarriesMachineTypeAndProvisionedDisk(t *testing.T) {
+	c := &Client{project: "p"}
+	inst := c.instanceSpec("us-central1-b", "n4d-standard-8", Config{
+		Name:                      "vm",
+		MachineTypes:              []string{"n4d-standard-8", "c3d-standard-8"},
+		DiskType:                  "hyperdisk-balanced",
+		DiskSizeGB:                200,
+		DiskProvisionedIops:       10000,
+		DiskProvisionedThroughput: 200,
+		ImageProject:              "p",
+		ImageFamily:               "ci-base",
+	})
+	if want := "zones/us-central1-b/machineTypes/n4d-standard-8"; inst.MachineType != want {
+		t.Errorf("MachineType = %q, want %q", inst.MachineType, want)
+	}
+	p := inst.Disks[0].InitializeParams
+	if p.ProvisionedIops != 10000 || p.ProvisionedThroughput != 200 {
+		t.Errorf("provisioned = %d IOPS / %d MB/s, want 10000 / 200", p.ProvisionedIops, p.ProvisionedThroughput)
+	}
+}
+
+func TestMachineTypesWinOverMachineType(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  Config
+		want []string
+	}{
+		{"single", Config{MachineType: "a"}, []string{"a"}},
+		{"list wins", Config{MachineType: "a", MachineTypes: []string{"b", "c"}}, []string{"b", "c"}},
+		{"none", Config{}, nil},
+	} {
+		if got := tc.cfg.machineTypes(); strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("%s: machineTypes() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestCreateRejectsNoMachineType(t *testing.T) {
+	c := &Client{project: "p"}
+	if _, err := c.Create(context.Background(), Config{Name: "vm", Zones: []string{"z"}}); err == nil {
+		t.Fatal("want an error when no machine type is configured")
+	}
+}
+
+// Every type is tried in every zone, so a stockout of one type falls through to
+// the next rather than failing the create.
+func TestCreateTriesEveryTypeInEveryZone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	c := &Client{project: "p"}
+	_, err := c.Create(ctx, Config{Name: "vm", MachineTypes: []string{"t1", "t2"}, Zones: []string{"z-a", "z-b"}})
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	for _, a := range []string{"t1 in z-a", "t1 in z-b", "t2 in z-a", "t2 in z-b"} {
+		if !strings.Contains(err.Error(), a+": not attempted") {
+			t.Errorf("error should name %q; got: %s", a, err)
+		}
 	}
 }
 
@@ -86,7 +149,7 @@ func TestCreateReportsUnattemptedZonesSeparately(t *testing.T) {
 
 	// svc is nil: if any zone reached the API this would panic, which is the point.
 	c := &Client{project: "p"}
-	_, err := c.Create(ctx, Config{Name: "vm", Zones: []string{"z-a", "z-b", "z-c"}})
+	_, err := c.Create(ctx, Config{Name: "vm", MachineType: "n2-standard-16", Zones: []string{"z-a", "z-b", "z-c"}})
 	if err == nil {
 		t.Fatal("want an error")
 	}
