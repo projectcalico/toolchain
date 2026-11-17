@@ -96,14 +96,8 @@ func (c *Client) Create(ctx context.Context, cfg Config) (zone string, err error
 			if err == nil {
 				return z, nil
 			}
-			// GCE holds a name across a region's zones, so an earlier zone's insert
-			// that landed after we gave up on it fails every later zone. That
-			// machine is the one this create asked for.
-			if isAlreadyExists(err) {
-				if live, ok := c.adopt(ctx, cfg.Name); ok {
-					return live, nil
-				}
-			}
+			// A 409 is not adopted: every failed attempt has already had its own
+			// machine deleted, so a live one with this name is not this create's.
 			errs = append(errs, fmt.Errorf("%s: %w", attempt, err))
 		}
 	}
@@ -133,13 +127,15 @@ func (c *Client) createInZone(ctx context.Context, zone, machineType string, cfg
 	if err != nil {
 		return fmt.Errorf("insert: %w", err)
 	}
-	if err := c.waitZoneOp(zctx, zone, op.Name); err != nil {
-		// Only a slow operation, not a failed one: the machine may be up regardless,
-		// and it would hold the name against every other zone.
-		if zctx.Err() != nil && c.liveIn(zone, cfg.Name) {
-			fmt.Fprintf(os.Stderr, "[gce] insert of %s in %s outlived its deadline, but the machine exists; using it\n", cfg.Name, zone)
-			return nil
-		}
+	err = c.waitZoneOp(zctx, zone, op.Name)
+	// A slow insert whose machine already exists holds the name against every other
+	// zone, so moving on would only meet 409s. It can still fail, so it is waited
+	// out on the overall deadline rather than taken as done.
+	if err != nil && zctx.Err() != nil && ctx.Err() == nil && c.liveIn(zone, cfg.Name) {
+		fmt.Fprintf(os.Stderr, "[gce] insert of %s in %s outlived its deadline, but the machine exists; waiting for it\n", cfg.Name, zone)
+		err = c.waitZoneOp(ctx, zone, op.Name)
+	}
+	if err != nil {
 		// The insert was accepted, so an instance may exist. Left behind it would run
 		// to max-run-duration while we boot another elsewhere -- two VMs for one job.
 		c.deleteBestEffort(zone, cfg.Name)
@@ -149,8 +145,7 @@ func (c *Client) createInZone(ctx context.Context, zone, machineType string, cfg
 }
 
 // liveIn reports whether the named instance exists in zone and is not going away.
-// Create does not wait for the machine to be usable either, so one still
-// provisioning counts. Its own context: the caller's has typically expired.
+// Its own context: the caller's per-zone one has expired.
 func (c *Client) liveIn(zone, name string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), CleanupTimeout)
 	defer cancel()
@@ -164,18 +159,9 @@ func (c *Client) liveIn(zone, name string) bool {
 	return !goingAway(inst.Status)
 }
 
-// adopt returns the zone of the one live instance of this name, if there is one.
-func (c *Client) adopt(ctx context.Context, name string) (string, bool) {
-	zone, err := c.FindLiveZone(ctx, name)
-	if err != nil || zone == "" {
-		return "", false
-	}
-	fmt.Fprintf(os.Stderr, "[gce] %s already exists in %s, from an earlier attempt; using it\n", name, zone)
-	return zone, true
-}
-
-// CleanupTimeout bounds the synchronous delete a timed-out zone performs. Exported
-// because a failing zone costs PerZoneTimeout + CleanupTimeout, not just the former.
+// CleanupTimeout bounds each of the two calls a timed-out zone makes, the check for
+// its machine and the synchronous delete. Exported because a failing zone costs
+// PerZoneTimeout + 2*CleanupTimeout, not just the former.
 const CleanupTimeout = 2 * time.Minute
 
 // deleteBestEffort builds its own context: the caller's is typically already
@@ -381,12 +367,6 @@ func sourceImage(cfg Config) string {
 		return fmt.Sprintf("projects/%s/global/images/%s", cfg.ImageProject, cfg.Image)
 	}
 	return fmt.Sprintf("projects/%s/global/images/family/%s", cfg.ImageProject, cfg.ImageFamily)
-}
-
-// isAlreadyExists reports a 409 from the compute API.
-func isAlreadyExists(err error) bool {
-	var gerr *googleapi.Error
-	return errors.As(err, &gerr) && gerr.Code == http.StatusConflict
 }
 
 // isNotFound reports a 404 from the compute API. Matching the status beats

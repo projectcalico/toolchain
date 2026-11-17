@@ -21,10 +21,13 @@ import (
 // behind, as GCE did when it took longer than the per-zone deadline.
 type fakeCompute struct {
 	mu        sync.Mutex
-	insert    map[string]string // zone -> "ok" | "conflict" | "slow" | "slow-landed"
+	insert    map[string]string // zone -> "ok" | "conflict" | "slow" | "late" | "late-failed"
 	instances map[string]string // zone -> status
 	inserts   []string
 	deletes   []string
+	// lateDone is when a late insert's operation finishes, well past the per-zone
+	// deadline.
+	lateDone map[string]time.Time
 }
 
 func (f *fakeCompute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +52,24 @@ func (f *fakeCompute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reply(compute.InstanceAggregatedList{Items: items})
 	case zoneAt > 0 && parts[zoneAt+1] == "operations":
 		op := parts[zoneAt+2]
+		if done, ok := f.lateDone[op]; ok {
+			if time.Now().Before(done) {
+				f.mu.Unlock()
+				time.Sleep(10 * time.Millisecond)
+				f.mu.Lock()
+				reply(compute.Operation{Name: op, Status: "RUNNING"})
+				return
+			}
+			if strings.HasPrefix(op, "late-failed") {
+				// GCE takes back a machine whose insert failed.
+				delete(f.instances, parts[zoneAt])
+				reply(compute.Operation{Name: op, Status: "DONE", Error: &compute.OperationError{
+					Errors: []*compute.OperationErrorErrors{{Code: "ZONE_RESOURCE_POOL_EXHAUSTED", Message: "no capacity"}}}})
+				return
+			}
+			reply(compute.Operation{Name: op, Status: "DONE"})
+			return
+		}
 		if strings.HasPrefix(op, "slow") {
 			// Never DONE: the caller's deadline is what ends the wait.
 			f.mu.Unlock()
@@ -67,9 +88,14 @@ func (f *fakeCompute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			reply(map[string]any{"error": map[string]any{"code": 409, "message": "already exists"}})
 		case "slow":
 			reply(compute.Operation{Name: "slow-" + z, Status: "RUNNING"})
-		case "slow-landed":
+		case "late", "late-failed":
 			f.instances[z] = "PROVISIONING"
-			reply(compute.Operation{Name: "slow-" + z, Status: "RUNNING"})
+			op := f.insert[z] + "-" + z
+			if f.lateDone == nil {
+				f.lateDone = map[string]time.Time{}
+			}
+			f.lateDone[op] = time.Now().Add(500 * time.Millisecond)
+			reply(compute.Operation{Name: op, Status: "RUNNING"})
 		default:
 			f.instances[z] = "PROVISIONING"
 			reply(compute.Operation{Name: "op-" + z, Status: "RUNNING"})
@@ -107,11 +133,10 @@ func createIn(c *Client, zones ...string) (string, error) {
 	return c.Create(context.Background(), Config{Name: "vm", MachineType: "t", Zones: zones})
 }
 
-// An insert slower than the per-zone deadline can still make the machine, and
-// that machine holds the name against every other zone, so it is used rather
-// than deleted.
-func TestCreateUsesASlowInsertThatLanded(t *testing.T) {
-	f := &fakeCompute{insert: map[string]string{"z-a": "slow-landed", "z-b": "ok"}, instances: map[string]string{}}
+// An insert slower than the per-zone deadline whose machine already exists holds
+// the name against every other zone, so it is waited out rather than abandoned.
+func TestCreateWaitsOutASlowInsertThatLanded(t *testing.T) {
+	f := &fakeCompute{insert: map[string]string{"z-a": "late", "z-b": "ok"}, instances: map[string]string{}}
 	zone, err := createIn(newFakeClient(t, f), "z-a", "z-b")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -121,6 +146,22 @@ func TestCreateUsesASlowInsertThatLanded(t *testing.T) {
 	}
 	if len(f.deletes) != 0 || len(f.inserts) != 1 {
 		t.Errorf("inserts %v, deletes %v; want one insert and no delete", f.inserts, f.deletes)
+	}
+}
+
+// A slow insert can still fail after its machine appeared; that is not a machine
+// to run on, so it is cleaned up and the next zone tried.
+func TestCreateMovesOnFromASlowInsertThatFailedLate(t *testing.T) {
+	f := &fakeCompute{insert: map[string]string{"z-a": "late-failed", "z-b": "ok"}, instances: map[string]string{}}
+	zone, err := createIn(newFakeClient(t, f), "z-a", "z-b")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if zone != "z-b" {
+		t.Errorf("zone = %q, want the next zone", zone)
+	}
+	if len(f.deletes) != 1 || f.deletes[0] != "z-a" {
+		t.Errorf("deletes = %v, want the failed z-a cleaned up", f.deletes)
 	}
 }
 
@@ -139,29 +180,15 @@ func TestCreateMovesOnFromASlowInsertThatMadeNothing(t *testing.T) {
 	}
 }
 
-// What failed in CI: the name is taken by an earlier zone's machine, so every
-// later insert conflicts. The live machine is the one this create asked for.
-func TestCreateAdoptsTheMachineAConflictNames(t *testing.T) {
-	f := &fakeCompute{insert: map[string]string{"z-b": "conflict"}, instances: map[string]string{"z-a": "RUNNING"}}
-	zone, err := createIn(newFakeClient(t, f), "z-b", "z-c")
-	if err != nil {
-		t.Fatalf("Create: %v", err)
+// A live machine with this name that this create did not make, such as one a
+// rerun's earlier pod left behind, is never taken as this job's.
+func TestCreateDoesNotAdoptAMachineItDidNotMake(t *testing.T) {
+	f := &fakeCompute{insert: map[string]string{"z-b": "conflict", "z-c": "conflict"}, instances: map[string]string{"z-a": "RUNNING"}}
+	if zone, err := createIn(newFakeClient(t, f), "z-b", "z-c"); err == nil {
+		t.Errorf("Create = %q, want a failure rather than someone else's machine", zone)
 	}
-	if zone != "z-a" {
-		t.Errorf("zone = %q, want the machine that holds the name", zone)
-	}
-}
-
-// A machine on its way down is not a place to run a job: the conflict stays a
-// failure for that zone, and the next is tried.
-func TestCreateDoesNotAdoptADyingMachine(t *testing.T) {
-	f := &fakeCompute{insert: map[string]string{"z-b": "conflict", "z-c": "ok"}, instances: map[string]string{"z-a": "STOPPING"}}
-	zone, err := createIn(newFakeClient(t, f), "z-b", "z-c")
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if zone != "z-c" {
-		t.Errorf("zone = %q, want the next zone rather than the dying machine", zone)
+	if len(f.deletes) != 0 {
+		t.Errorf("deletes = %v, want the other machine left alone", f.deletes)
 	}
 }
 

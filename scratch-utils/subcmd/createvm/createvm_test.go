@@ -163,3 +163,32 @@ func TestParseLabelsRejectsWhatGCEWould(t *testing.T) {
 		}
 	}
 }
+
+// Provisioned performance on a disk type that takes none would fail every attempt
+// in turn at GCE, so it is refused up front.
+func TestCheckDiskPerformance(t *testing.T) {
+	for _, tc := range []struct {
+		disk             string
+		iops, throughput int64
+		ok               bool
+	}{
+		{"pd-ssd", 0, 0, true},
+		{"hyperdisk-balanced", 6000, 290, true},
+		{"pd-extreme", 10000, 0, true},
+		{"pd-ssd", 3000, 0, false},
+		{"pd-balanced", 0, 200, false},
+		{"pd-extreme", 0, 200, false},
+	} {
+		if err := checkDiskPerformance(tc.disk, tc.iops, tc.throughput); (err == nil) != tc.ok {
+			t.Errorf("checkDiskPerformance(%s, %d, %d) = %v, want ok=%v", tc.disk, tc.iops, tc.throughput, err, tc.ok)
+		}
+	}
+}
+
+// The default labels are held to GCE's rules too: CI_WORKFLOW_LABEL is the caller's.
+func TestParseLabelsChecksTheDefaults(t *testing.T) {
+	t.Setenv("CI_WORKFLOW_LABEL", "Calico.Run")
+	if _, err := parseLabels(""); err == nil {
+		t.Error("an invalid CI_WORKFLOW_LABEL was accepted")
+	}
+}

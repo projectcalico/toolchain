@@ -82,6 +82,10 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	diskType := util.EnvOr("GOOGLE_VM_DISK_TYPE", "pd-ssd")
+	if err := checkDiskPerformance(diskType, iops, throughput); err != nil {
+		return err
+	}
 	labels, err := parseLabels(os.Getenv("GOOGLE_VM_LABELS"))
 	if err != nil {
 		return err
@@ -95,7 +99,7 @@ func run(ctx context.Context) error {
 		Name:                      name,
 		Zones:                     zones,
 		MachineTypes:              machineTypes,
-		DiskType:                  util.EnvOr("GOOGLE_VM_DISK_TYPE", "pd-ssd"),
+		DiskType:                  diskType,
 		DiskSizeGB:                diskGB,
 		DiskProvisionedIops:       iops,
 		DiskProvisionedThroughput: throughput,
@@ -129,10 +133,6 @@ func run(ctx context.Context) error {
 	return nil
 }
 
-// parseMaxRun parses the VM's reclaim deadline. Non-positive is rejected rather
-// than passed on: instanceSpec omits the whole Scheduling block when MaxRun is not
-// positive, so "0s" would create a VM with no deadline at all -- and deletevm
-// returning 0 on any failure assumes that deadline is there to catch it.
 // GCE's rules for a label key and value; a value may be empty.
 var (
 	labelKeyRe   = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
@@ -154,10 +154,16 @@ func parseLabels(s string) (map[string]string, error) {
 			continue
 		}
 		key, value, ok := strings.Cut(pair, "=")
-		if !ok || !labelKeyRe.MatchString(key) || !labelValueRe.MatchString(value) {
-			return nil, fmt.Errorf("GOOGLE_VM_LABELS: %q is not a GCE label (key=value, lowercase letters, digits, - and _)", pair)
+		if !ok {
+			return nil, fmt.Errorf("GOOGLE_VM_LABELS: %q is not key=value", pair)
 		}
 		labels[key] = value
+	}
+	// The defaults too: CI_WORKFLOW_LABEL comes from the caller as well.
+	for key, value := range labels {
+		if !labelKeyRe.MatchString(key) || !labelValueRe.MatchString(value) {
+			return nil, fmt.Errorf("label %s=%q is not a GCE label (lowercase letters, digits, - and _)", key, value)
+		}
 	}
 	if len(labels) > 64 {
 		return nil, fmt.Errorf("GOOGLE_VM_LABELS: %d labels, more than the 64 GCE allows", len(labels))
@@ -165,6 +171,10 @@ func parseLabels(s string) (map[string]string, error) {
 	return labels, nil
 }
 
+// parseMaxRun parses the VM's reclaim deadline. Non-positive is rejected rather
+// than passed on: instanceSpec omits the whole Scheduling block when MaxRun is not
+// positive, so "0s" would create a VM with no deadline at all -- and deletevm
+// returning 0 on any failure assumes that deadline is there to catch it.
 func parseMaxRun(s string) (time.Duration, error) {
 	d, err := time.ParseDuration(s)
 	if err != nil {
@@ -208,9 +218,23 @@ func parseOptionalCount(name string) (int64, error) {
 	return n, nil
 }
 
+// checkDiskPerformance refuses provisioned performance a disk type does not take,
+// which GCE would otherwise reject on every attempt in turn.
+func checkDiskPerformance(diskType string, iops, throughput int64) error {
+	hyperdisk := strings.HasPrefix(diskType, "hyperdisk-")
+	if iops > 0 && !hyperdisk && diskType != "pd-extreme" {
+		return fmt.Errorf("GOOGLE_VM_DISK_PROVISIONED_IOPS needs a hyperdisk or pd-extreme disk, not %s", diskType)
+	}
+	if throughput > 0 && !hyperdisk {
+		return fmt.Errorf("GOOGLE_VM_DISK_PROVISIONED_THROUGHPUT needs a hyperdisk disk, not %s", diskType)
+	}
+	return nil
+}
+
 // overallTimeout budgets every machine-type-and-zone attempt in full. A timed-out
-// attempt then deletes the abandoned VM synchronously, so it costs PerZoneTimeout +
-// CleanupTimeout; counting only the former left the last attempt unmade. The minute covers client setup.
+// attempt then checks for and deletes the abandoned VM, so it costs PerZoneTimeout +
+// 2*CleanupTimeout; counting less left the last attempts unmade. The minute covers
+// client setup.
 func overallTimeout(attempts int) time.Duration {
-	return time.Duration(attempts)*(gce.PerZoneTimeout+gce.CleanupTimeout) + time.Minute
+	return time.Duration(attempts)*(gce.PerZoneTimeout+2*gce.CleanupTimeout) + time.Minute
 }
