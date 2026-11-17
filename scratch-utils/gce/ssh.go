@@ -9,7 +9,6 @@ package gce
 import (
 	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -21,8 +20,10 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"golang.org/x/crypto/ssh"
 	compute "google.golang.org/api/compute/v1"
 
@@ -226,24 +227,20 @@ func (s *SSH) Run(cmd string, stdout, stderr io.Writer) (exitCode int, err error
 
 // PutData writes data to remote at the given mode, creating parent dirs.
 func (s *SSH) PutData(data []byte, remote string, mode os.FileMode) error {
-	sess, err := s.client.NewSession()
-	if err != nil {
+	err := s.runWithInput(putCommand(remote, mode), func(w io.Writer) error {
+		_, err := w.Write(data)
 		return err
-	}
-	defer sess.Close()
-	sess.Stdin = bytes.NewReader(data)
-	// Capture remote stderr so a failing mkdir/chmod says why.
-	var errBuf bytes.Buffer
-	sess.Stderr = &errBuf
-	if err := sess.Run(putCommand(remote, mode)); err != nil {
-		return fmt.Errorf("put %s: %w: %s", remote, err, strings.TrimSpace(errBuf.String()))
+	})
+	if err != nil {
+		return fmt.Errorf("put %s: %w", remote, err)
 	}
 	return nil
 }
 
-// putCommand writes stdin to remote at mode, staged through a 0600 mktemp file in the
-// same directory. Writing remote directly creates it at the shell's umask and narrows
-// it only afterwards, exposing a secret for the length of the upload.
+// putCommand writes stdin, a zstd stream, to remote at mode, decompressed and staged
+// through a 0600 mktemp file in the same directory. Writing remote directly creates
+// it at the shell's umask and narrows it only afterwards, exposing a secret for the
+// length of the upload.
 //
 // -T is load-bearing: plain `mv -f tmp dir` moves the payload *into* an existing
 // directory and exits 0. It also replaces a destination symlink rather than writing
@@ -255,22 +252,57 @@ func putCommand(remote string, mode os.FileMode) string {
 	qd := util.ShellQuote(filepath.Dir(remote))
 	return fmt.Sprintf(
 		`mkdir -p %s && t="$(mktemp %s/.put.XXXXXX)" && trap 'rm -f "$t"' EXIT && `+
-			`cat > "$t" && chmod %o "$t" && mv -fT -- "$t" %s && trap - EXIT`,
+			`zstd -dcq > "$t" && chmod %o "$t" && mv -fT -- "$t" %s && trap - EXIT`,
 		qd, qd, mode.Perm(), q)
 }
 
-// PutFile uploads a single local file to remote at the given mode.
+// PutFile streams a single local file to remote at the given mode.
 func (s *SSH) PutFile(local, remote string, mode os.FileMode) error {
-	data, err := os.ReadFile(local)
+	f, err := os.Open(local)
 	if err != nil {
 		return err
 	}
-	return s.PutData(data, remote, mode)
+	defer f.Close()
+	err = s.runWithInput(putCommand(remote, mode), func(w io.Writer) error {
+		_, err := io.Copy(w, f)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("put %s: %w", remote, err)
+	}
+	return nil
 }
 
 // PutDir uploads a local directory tree to a remote directory (created if absent)
 // by streaming a tar over the connection and untarring on the VM.
 func (s *SSH) PutDir(localDir, remoteDir string) error {
+	if err := s.runWithInput(putDirCommand(remoteDir), func(w io.Writer) error { return tarDir(localDir, w) }); err != nil {
+		return fmt.Errorf("put dir %s: %w", remoteDir, err)
+	}
+	return nil
+}
+
+// putDirCommand extracts stdin, a zstd tar, into a staging directory beside
+// remoteDir, so a stream cut short leaves nothing at remoteDir: extracting in place
+// kept every entry before the cut, the last one truncated. A new remoteDir is the
+// staging directory renamed; an existing one gets its contents copied in. tar runs
+// the decompressor itself, so a corrupt stream fails the command rather than
+// vanishing into a pipeline's exit status.
+func putDirCommand(remoteDir string) string {
+	q := util.ShellQuote(remoteDir)
+	qd := util.ShellQuote(filepath.Dir(remoteDir))
+	return fmt.Sprintf(
+		`mkdir -p %s && t="$(mktemp -d %s/.putdir.XXXXXX)" && trap 'rm -rf "$t"' EXIT && `+
+			`tar --zstd -xf - -C "$t" && `+
+			// mktemp's 0700 would otherwise become the new directory's mode.
+			`if [ -e %s ]; then cp -a "$t/." %s/; else chmod u=rwx,go=rx "$t" && mv -T -- "$t" %s && trap - EXIT; fi`,
+		qd, qd, q, q, q)
+}
+
+// runWithInput runs cmd on the VM with what write produces, zstd-compressed, as its
+// stdin. The stream's end marker is what tells the remote it is whole: a raw stream
+// cut short by a local failure reaches it as a clean end of input.
+func (s *SSH) runWithInput(cmd string, write func(io.Writer) error) error {
 	sess, err := s.client.NewSession()
 	if err != nil {
 		return err
@@ -279,42 +311,92 @@ func (s *SSH) PutDir(localDir, remoteDir string) error {
 
 	pr, pw := io.Pipe()
 	sess.Stdin = pr
-	// Unblocks tarDir if the session dies before draining the pipe.
+	// Unblocks the writer if the session dies before draining the pipe.
 	defer pr.Close()
-	// Buffered so the goroutine finishes even on the early returns below.
-	tarErr := make(chan error, 1)
+	// Buffered so the goroutine finishes even on the early return below.
+	writeErr := make(chan error, 1)
 	go func() {
-		err := tarDir(localDir, pw)
+		err := writeStream(pw, write)
+		// Recorded before the close that ends the remote's input, so it is there
+		// by the time Run returns.
+		writeErr <- err
 		pw.CloseWithError(err)
-		tarErr <- err
 	}()
+	// Captured so a failing remote command says why.
 	var errBuf bytes.Buffer
 	sess.Stderr = &errBuf
-
-	q := util.ShellQuote(remoteDir)
-	cmd := fmt.Sprintf("mkdir -p %s && tar xzf - -C %s", q, q)
 	if err := sess.Run(cmd); err != nil {
-		return fmt.Errorf("put dir %s: %w: %s", remoteDir, err, strings.TrimSpace(errBuf.String()))
+		remote := fmt.Errorf("%w: %s", err, strings.TrimSpace(errBuf.String()))
+		// A local failure cuts the stream short, so the remote end then fails too,
+		// on input that says nothing of why. Report the local one when there is one.
+		select {
+		case werr := <-writeErr:
+			if werr != nil {
+				return fmt.Errorf("%w (remote: %v)", werr, remote)
+			}
+		default:
+		}
+		return remote
 	}
-	// Run returned, so the tar is done. An error here means we shipped a truncated
-	// tree the remote untarred without complaint.
-	if err := <-tarErr; err != nil {
-		return fmt.Errorf("tar %s for %s: %w", localDir, remoteDir, err)
-	}
-	return nil
+	// Run returned, so the input is done. An error here means we shipped a
+	// truncated stream the remote accepted without complaint.
+	return <-writeErr
 }
 
-// getCommand tars the contents of remoteDir (not the directory itself) to stdout, so
-// they land directly under the local destination.
+// writeStream runs write against w through a zstd encoder. Already-compressed data
+// costs little: at this level the encoder stores a block it cannot shrink.
+func writeStream(w io.Writer, write func(io.Writer) error) error {
+	// The fastest level: the sending pod is often given a fraction of a core, and
+	// compressing slower than the network turns a saving into a delay.
+	cw := &cutWriter{w: w}
+	zw, err := zstd.NewWriter(cw, zstd.WithEncoderLevel(zstd.SpeedFastest))
+	if err != nil {
+		return err
+	}
+	if err := write(zw); err != nil {
+		// Closing writes the frame's end and checksum, which would let the remote
+		// decompress what was cut short as if it were whole.
+		cw.cut()
+		zw.Close()
+		return err
+	}
+	return zw.Close()
+}
+
+// cutWriter passes writes through to w until cut, then discards them.
+type cutWriter struct {
+	mu    sync.Mutex
+	w     io.Writer
+	isCut bool
+}
+
+func (c *cutWriter) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.isCut {
+		return len(p), nil
+	}
+	return c.w.Write(p)
+}
+
+func (c *cutWriter) cut() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.isCut = true
+}
+
+// getCommand tars the contents of remoteDir (not the directory itself) to stdout as
+// a zstd stream, so they land directly under the local destination.
 //
 // A missing directory is forgiven, tar's own failures are not. `cd && tar || true`
 // forgave both: a tar that exited non-zero -- an unreadable file, or one that changed
 // while being read -- still emitted a valid archive of whatever it managed to read,
 // untar accepted it, and GetDir returned nil. A partial download was reported as a
-// complete one.
+// complete one. tar runs the compressor itself for the same reason: in a pipeline
+// its exit status would be lost.
 func getCommand(remoteDir string) string {
 	q := util.ShellQuote(remoteDir)
-	return fmt.Sprintf("if [ -d %s ]; then cd %s && tar czf - .; fi", q, q)
+	return fmt.Sprintf("if [ -d %s ]; then cd %s && tar --use-compress-program='zstd -1 -T0' -cf - .; fi", q, q)
 }
 
 // GetDir streams a remote directory's contents into localDir. Best-effort: a
@@ -331,20 +413,35 @@ func (s *SSH) GetDir(remoteDir, localDir string) error {
 	if err != nil {
 		return err
 	}
+	// Captured so a failing remote tar says why, not just its exit status.
+	var errBuf bytes.Buffer
+	sess.Stderr = &errBuf
 	if err := sess.Start(getCommand(remoteDir)); err != nil {
 		return err
 	}
-	if err := untar(stdout, localDir); err != nil {
+	// One goroutine: the default decodes ahead in the background, which would read
+	// stdout concurrently with the drain below.
+	zr, err := zstd.NewReader(stdout, zstd.WithDecoderConcurrency(1))
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+	if err := untar(zr, localDir); err != nil {
 		// Drain first: abandoning the pipe while the remote tar writes blocks it
 		// forever, and Wait with it.
 		_, _ = io.Copy(io.Discard, stdout)
-		_ = sess.Wait()
+		if werr := sess.Wait(); werr != nil {
+			return fmt.Errorf("%w (remote: %v: %s)", err, werr, strings.TrimSpace(errBuf.String()))
+		}
 		return err
 	}
-	return sess.Wait()
+	if err := sess.Wait(); err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(errBuf.String()))
+	}
+	return nil
 }
 
-// tarDir writes a gzipped tar of dir's contents (paths relative to dir) to w.
+// tarDir writes a tar of dir's contents (paths relative to dir) to w.
 func tarDir(dir string, w io.Writer) error {
 	// The root only. runonvm picks PutDir from os.Stat, which follows a symlink, but
 	// Walk does not follow the root it is given: its single visit is the link itself,
@@ -353,8 +450,7 @@ func tarDir(dir string, w io.Writer) error {
 	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
 		dir = resolved
 	}
-	gz := gzip.NewWriter(w)
-	tw := tar.NewWriter(gz)
+	tw := tar.NewWriter(w)
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -398,26 +494,12 @@ func tarDir(dir string, w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := tw.Close(); err != nil {
-		return err
-	}
-	return gz.Close()
+	return tw.Close()
 }
 
-// untar extracts a gzipped tar stream into destDir, guarding against paths that
-// would escape it.
+// untar extracts a tar stream into destDir, guarding against paths that would
+// escape it.
 func untar(r io.Reader, destDir string) error {
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
-		return err
-	}
-	gz, err := gzip.NewReader(r)
-	if err != nil {
-		// An empty stream (missing remote dir) is not an error.
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		return err
-	}
 	// Rooted at destDir. The lexical check this replaces compared against destDir as
 	// spelled, so it rejected valid destinations ("./artifacts" never equals the
 	// cleaned "artifacts") and could not see through a symlink already in destDir. A
@@ -431,7 +513,8 @@ func untar(r io.Reader, destDir string) error {
 	}
 	defer root.Close()
 
-	tr := tar.NewReader(gz)
+	// An empty stream (missing remote dir) reads as an empty archive.
+	tr := tar.NewReader(r)
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -457,15 +540,24 @@ func untar(r io.Reader, destDir string) error {
 					return err
 				}
 			}
-			f, err := root.OpenFile(name, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(hdr.Mode))
+			// Written aside and renamed once whole, so a stream that breaks mid-file
+			// leaves neither a truncated file under the real name nor a clobbered one.
+			partial := name + ".partial"
+			f, err := root.OpenFile(partial, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(hdr.Mode))
 			if err != nil {
 				return err
 			}
-			if _, err := io.Copy(f, tr); err != nil { //nolint:gosec // CI artifacts we produced
-				f.Close()
+			_, err = io.Copy(f, tr) //nolint:gosec // CI artifacts we produced
+			if cerr := f.Close(); err == nil {
+				err = cerr
+			}
+			if err == nil {
+				err = root.Rename(partial, name)
+			}
+			if err != nil {
+				_ = root.Remove(partial)
 				return err
 			}
-			f.Close()
 		}
 	}
 }
