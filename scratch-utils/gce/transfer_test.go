@@ -3,7 +3,9 @@
 package gce
 
 import (
+	"archive/tar"
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -12,8 +14,6 @@ import (
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
-
-	"github.com/projectcalico/go-build/scratch-utils/util"
 )
 
 // The remote half of each transfer is a shell command run on the VM, so these run
@@ -27,10 +27,10 @@ func needZstd(t *testing.T) {
 
 // runLocal runs cmd under bash with what write produces, through writeStream, as
 // its stdin.
-func runLocal(t *testing.T, cmd string, raw bool, write func(io.Writer) error) {
+func runLocal(t *testing.T, cmd string, write func(io.Writer) error) {
 	t.Helper()
 	var in bytes.Buffer
-	if err := writeStream(&in, raw, write); err != nil {
+	if err := writeStream(&in, write); err != nil {
 		t.Fatalf("writeStream: %v", err)
 	}
 	c := exec.Command("bash", "-c", cmd)
@@ -44,7 +44,7 @@ func TestPutFileCompressedRoundTrip(t *testing.T) {
 	needZstd(t)
 	dest := filepath.Join(t.TempDir(), "sub", "payload.bin")
 	want := []byte(strings.Repeat("calico ", 10000))
-	runLocal(t, putCommand(dest, 0o640, true), false, func(w io.Writer) error {
+	runLocal(t, putCommand(dest, 0o640), func(w io.Writer) error {
 		_, err := w.Write(want)
 		return err
 	})
@@ -69,13 +69,13 @@ func TestPutFileRejectsATruncatedStream(t *testing.T) {
 	needZstd(t)
 	dest := filepath.Join(t.TempDir(), "payload.bin")
 	var in bytes.Buffer
-	if err := writeStream(&in, false, func(w io.Writer) error {
+	if err := writeStream(&in, func(w io.Writer) error {
 		_, err := w.Write(bytes.Repeat([]byte("x"), 1<<20))
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	c := exec.Command("bash", "-c", putCommand(dest, 0o644, true))
+	c := exec.Command("bash", "-c", putCommand(dest, 0o644))
 	c.Stdin = bytes.NewReader(in.Bytes()[:in.Len()/2])
 	if err := c.Run(); err == nil {
 		t.Fatal("a truncated stream was accepted")
@@ -95,14 +95,122 @@ func TestPutDirCompressedRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(t.TempDir(), "out")
-	q := util.ShellQuote(dst)
-	runLocal(t, "mkdir -p "+q+" && tar --zstd -xf - -C "+q, false, func(w io.Writer) error {
+	runLocal(t, putDirCommand(dst), func(w io.Writer) error {
 		return tarDir(src, w)
 	})
 	got, err := os.ReadFile(filepath.Join(dst, "a", "b", "f.txt"))
 	if err != nil || string(got) != "hello" {
 		t.Fatalf("got %q, %v", got, err)
 	}
+	// A new directory, not mktemp's private one.
+	if info, err := os.Stat(dst); err != nil || info.Mode().Perm() != 0o755 {
+		t.Errorf("destination mode = %v, %v; want 0755", info.Mode().Perm(), err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(dst), ".putdir.*")); len(left) != 0 {
+		t.Errorf("staging left behind: %v", left)
+	}
+}
+
+// Into an existing directory, the archive's files join what is there.
+func TestPutDirMergesIntoAnExistingDirectory(t *testing.T) {
+	needZstd(t)
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "new.txt"), []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dst, "kept.txt"), []byte("kept"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runLocal(t, putDirCommand(dst), func(w io.Writer) error { return tarDir(src, w) })
+	for name, want := range map[string]string{"new.txt": "new", "kept.txt": "kept"} {
+		if got, err := os.ReadFile(filepath.Join(dst, name)); err != nil || string(got) != want {
+			t.Errorf("%s = %q, %v; want %q", name, got, err, want)
+		}
+	}
+}
+
+// A stream cut short must leave the destination as it was: extracting in place kept
+// every entry before the cut, the last one truncated.
+func TestPutDirFailedStreamLeavesNothing(t *testing.T) {
+	needZstd(t)
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "big.bin"), bytes.Repeat([]byte("calico"), 1<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var in bytes.Buffer
+	if err := writeStream(&in, func(w io.Writer) error { return tarDir(src, w) }); err != nil {
+		t.Fatal(err)
+	}
+	parent := t.TempDir()
+	for _, existing := range []bool{false, true} {
+		dst := filepath.Join(parent, fmt.Sprintf("out-%v", existing))
+		if existing {
+			if err := os.MkdirAll(dst, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		c := exec.Command("bash", "-c", putDirCommand(dst))
+		c.Stdin = bytes.NewReader(in.Bytes()[:in.Len()/2])
+		if err := c.Run(); err == nil {
+			t.Fatalf("existing=%v: a truncated stream was accepted", existing)
+		}
+		entries, err := os.ReadDir(dst)
+		switch {
+		case !existing && !os.IsNotExist(err):
+			t.Errorf("a new destination exists after a failed put: %v", err)
+		case existing && len(entries) != 0:
+			t.Errorf("an existing destination gained %d entries from a failed put", len(entries))
+		}
+	}
+	if left, _ := filepath.Glob(filepath.Join(parent, ".putdir.*")); len(left) != 0 {
+		t.Errorf("staging left behind: %v", left)
+	}
+}
+
+// A stream that breaks mid-file leaves neither a truncated file under its name nor a
+// clobbered earlier copy, and nothing half-written beside it.
+func TestUntarKeepsAFileWholeOrAbsent(t *testing.T) {
+	var archive bytes.Buffer
+	tw := tar.NewWriter(&archive)
+	body := bytes.Repeat([]byte("x"), 4096)
+	if err := tw.WriteHeader(&tar.Header{Name: "report.xml", Mode: 0o644, Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dst, "report.xml"), []byte("earlier"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := untar(bytes.NewReader(archive.Bytes()[:1024]), dst); err == nil {
+		t.Fatal("a stream cut mid-file was accepted")
+	}
+	if got, err := os.ReadFile(filepath.Join(dst, "report.xml")); err != nil || string(got) != "earlier" {
+		t.Errorf("report.xml = %q, %v; want the earlier copy untouched", got, err)
+	}
+	if entries, _ := os.ReadDir(dst); len(entries) != 1 {
+		t.Errorf("%d entries after a failed untar, want just the earlier file", len(entries))
+	}
+}
+
+// zstdIn is s as the zstd stream a put reads.
+func zstdIn(t *testing.T, s string) io.Reader {
+	t.Helper()
+	// Only the remote side, the zstd CLI, reads it.
+	needZstd(t)
+	var in bytes.Buffer
+	if err := writeStream(&in, func(w io.Writer) error {
+		_, err := io.WriteString(w, s)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return &in
 }
 
 func TestGetDirStreamRoundTrip(t *testing.T) {
@@ -147,61 +255,5 @@ func TestGetDirMissingRemoteIsEmpty(t *testing.T) {
 	defer zr.Close()
 	if err := untar(zr, t.TempDir()); err != nil {
 		t.Fatalf("untar of an empty stream: %v", err)
-	}
-}
-
-func TestIsCompressed(t *testing.T) {
-	dir := t.TempDir()
-	for name, tc := range map[string]struct {
-		content []byte
-		want    bool
-	}{
-		"zstd":  {[]byte{0x28, 0xb5, 0x2f, 0xfd, 0, 0}, true},
-		"gzip":  {[]byte{0x1f, 0x8b, 8, 0}, true},
-		"xz":    {[]byte{0xfd, '7', 'z', 'X', 'Z', 0, 1}, true},
-		"tar":   {[]byte("ustar\x00 plain archive"), false},
-		"text":  {[]byte("#!/bin/bash\n"), false},
-		"empty": {nil, false},
-		"short": {[]byte{0x1f}, false},
-	} {
-		p := filepath.Join(dir, name)
-		if err := os.WriteFile(p, tc.content, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		got, err := isCompressed(p)
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		if got != tc.want {
-			t.Errorf("%s: isCompressed = %v, want %v", name, got, tc.want)
-		}
-	}
-}
-
-func TestAllCompressed(t *testing.T) {
-	zst := []byte{0x28, 0xb5, 0x2f, 0xfd, 0, 0}
-	write := func(t *testing.T, dir, name string, b []byte) {
-		t.Helper()
-		if err := os.WriteFile(filepath.Join(dir, name), b, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	only := t.TempDir()
-	write(t, only, "calico-image.tar.zst", zst)
-	if got, err := allCompressed(only); err != nil || !got {
-		t.Errorf("all compressed: got %v, %v", got, err)
-	}
-
-	mixed := t.TempDir()
-	write(t, mixed, "image.tar.zst", zst)
-	write(t, mixed, "win-fv.exe", []byte("MZ"))
-	if got, err := allCompressed(mixed); err != nil || got {
-		t.Errorf("mixed: got %v, %v", got, err)
-	}
-
-	// Nothing to skip compressing, and compressing an empty tar is free.
-	if got, err := allCompressed(t.TempDir()); err != nil || got {
-		t.Errorf("empty: got %v, %v", got, err)
 	}
 }

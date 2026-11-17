@@ -276,8 +276,8 @@ func TestPutCommandNeverWidensTheDestination(t *testing.T) {
 				}
 			}
 
-			cmd := exec.Command("bash", "-c", putCommand(dest, tc.mode, false))
-			cmd.Stdin = strings.NewReader("s3cret")
+			cmd := exec.Command("bash", "-c", putCommand(dest, tc.mode))
+			cmd.Stdin = zstdIn(t, "s3cret")
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("running putCommand: %v: %s", err, out)
 			}
@@ -316,8 +316,8 @@ func TestPutCommandQuotesHostilePaths(t *testing.T) {
 	dir := t.TempDir()
 	for _, base := range []string{"a file", "$(touch pwned)", "semi;colon"} {
 		dest := filepath.Join(dir, base)
-		cmd := exec.Command("bash", "-c", putCommand(dest, 0o600, false))
-		cmd.Stdin = strings.NewReader("ok")
+		cmd := exec.Command("bash", "-c", putCommand(dest, 0o600))
+		cmd.Stdin = zstdIn(t, "ok")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("%q: %v: %s", base, err, out)
 		}
@@ -342,8 +342,8 @@ func TestPutCommandRejectsADirectoryDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command("bash", "-c", putCommand(dest, 0o600, false))
-	cmd.Stdin = strings.NewReader("payload")
+	cmd := exec.Command("bash", "-c", putCommand(dest, 0o600))
+	cmd.Stdin = zstdIn(t, "payload")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("expected failure writing over a directory, got success: %s", out)
@@ -386,8 +386,8 @@ func TestPutCommandReplacesASymlinkDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command("bash", "-c", putCommand(dest, 0o600, false))
-	cmd.Stdin = strings.NewReader("s3cret")
+	cmd := exec.Command("bash", "-c", putCommand(dest, 0o600))
+	cmd.Stdin = zstdIn(t, "s3cret")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("running putCommand: %v: %s", err, out)
 	}
