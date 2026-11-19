@@ -235,9 +235,19 @@ func TestGoBuildReadsACacheFilledByAPlainBuild(t *testing.T) {
 	if err != nil {
 		t.Skip("go not on PATH")
 	}
+	// The caller's own cache settings would turn the plain builds below into
+	// helper-backed ones; every go command here sets its own.
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "GOCACHEPROG=") && !strings.HasPrefix(kv, "GOCACHE=") {
+			env = append(env, kv)
+		}
+	}
 	work := t.TempDir()
 	helper := filepath.Join(work, "gocacheprog")
-	if out, err := exec.Command(goBin, "build", "-buildvcs=false", "-o", helper, ".").CombinedOutput(); err != nil {
+	helperBuild := exec.Command(goBin, "build", "-buildvcs=false", "-o", helper, ".")
+	helperBuild.Env = append(env, "GOCACHE="+filepath.Join(work, "helper-cache"))
+	if out, err := helperBuild.CombinedOutput(); err != nil {
 		t.Fatalf("building the helper: %v\n%s", err, out)
 	}
 	mod := filepath.Join(work, "mod")
@@ -255,16 +265,16 @@ func TestGoBuildReadsACacheFilledByAPlainBuild(t *testing.T) {
 	// A fresh output each time: an up-to-date one makes go skip the build, and so
 	// skip caching the main package.
 	builds := 0
-	build := func(env ...string) string {
+	build := func(extra ...string) string {
 		t.Helper()
 		builds++
 		cmd := exec.Command(goBin, "build", "-o", filepath.Join(work, fmt.Sprint("bin", builds)), ".")
 		cmd.Dir = mod
-		cmd.Env = append(os.Environ(), env...)
+		cmd.Env = append(slices.Clone(env), extra...)
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		if err := cmd.Run(); err != nil {
-			t.Fatalf("go build %v: %v\n%s", env, err, stderr.String())
+			t.Fatalf("go build %v: %v\n%s", extra, err, stderr.String())
 		}
 		return stderr.String()
 	}
@@ -294,7 +304,7 @@ func TestGoBuildReadsACacheFilledByAPlainBuild(t *testing.T) {
 	for _, args := range [][]string{{"vet", "."}, {"test", "-count=1", "."}} {
 		cmd := exec.Command(goBin, args...)
 		cmd.Dir = mod
-		cmd.Env = append(os.Environ(), "GOCACHE="+goCache, prog)
+		cmd.Env = append(slices.Clone(env), "GOCACHE="+goCache, prog)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Errorf("go %v through the helper: %v\n%s", args, err, out)
 		}
@@ -306,7 +316,7 @@ func TestGoBuildReadsACacheFilledByAPlainBuild(t *testing.T) {
 	build("GOCACHE="+filepath.Join(work, "gocache2"), fmt.Sprintf("GOCACHEPROG=%s -dir %s", helper, filled))
 	plain := exec.Command(goBin, "build", "-x", "-o", filepath.Join(work, "plain"), ".")
 	plain.Dir = mod
-	plain.Env = append(os.Environ(), "GOCACHE="+filled)
+	plain.Env = append(slices.Clone(env), "GOCACHE="+filled)
 	out, err := plain.CombinedOutput()
 	if err != nil {
 		t.Fatalf("plain build over the helper's directory: %v\n%s", err, out)
