@@ -135,6 +135,117 @@ func TestPutDirMergesIntoAnExistingDirectory(t *testing.T) {
 	if fi, err := os.Stat(dst); err != nil || fi.Mode().Perm() != 0o755 {
 		t.Errorf("destination mode = %v, %v; want it left at 0755", fi.Mode().Perm(), err)
 	}
+	if left, _ := filepath.Glob(filepath.Join(dst, ".putdir.*")); len(left) != 0 {
+		t.Errorf("staging left behind: %v", left)
+	}
+}
+
+// putDirLocal runs putDirCommand into dst with src's tree as its stdin, returning
+// the command's failure rather than failing the test.
+func putDirLocal(t *testing.T, src, dst string) error {
+	t.Helper()
+	var in bytes.Buffer
+	if err := writeStream(&in, func(w io.Writer) error { return tarDir(src, w) }); err != nil {
+		t.Fatalf("writeStream: %v", err)
+	}
+	c := exec.Command("bash", "-c", putDirCommand(dst))
+	c.Stdin = &in
+	if out, err := c.CombinedOutput(); err != nil {
+		return fmt.Errorf("%w: %s", err, out)
+	}
+	return nil
+}
+
+// tar replaced a read-only file, as in .git/objects or the Go module cache; the
+// merge must too, not fail with "Permission denied".
+func TestPutDirReplacesAReadOnlyFile(t *testing.T) {
+	needZstd(t)
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "pack"), []byte("new"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dst, "pack"), []byte("old"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := putDirLocal(t, src, dst); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dst, "pack")); err != nil || string(got) != "new" {
+		t.Errorf("pack = %q, %v; want the upload", got, err)
+	}
+}
+
+// A symlink at the destination is replaced, as tar did, not written through: the
+// upload would otherwise land wherever the link points.
+func TestPutDirReplacesASymlinkRatherThanWritingThroughIt(t *testing.T) {
+	needZstd(t)
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "report.txt"), []byte("upload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "elsewhere.txt")
+	if err := os.WriteFile(outside, []byte("untouched"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(dst, "report.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := putDirLocal(t, src, dst); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(outside); string(got) != "untouched" {
+		t.Errorf("the link's target = %q, want it left alone", got)
+	}
+	info, err := os.Lstat(filepath.Join(dst, "report.txt"))
+	if err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("report.txt = %v, %v; want a regular file in place of the link", info, err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dst, "report.txt")); string(got) != "upload" {
+		t.Errorf("report.txt = %q, want the upload", got)
+	}
+}
+
+// A put into an existing directory, such as /tmp or a home directory, must not
+// need write access to its parent.
+func TestPutDirIntoAnExistingDirectoryLeavesItsParentAlone(t *testing.T) {
+	needZstd(t)
+	if os.Geteuid() == 0 {
+		t.Skip("root writes to the read-only parent")
+	}
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "f.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	parent := t.TempDir()
+	dst := filepath.Join(parent, "home")
+	if err := os.Mkdir(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o755) })
+	if err := putDirLocal(t, src, dst); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dst, "f.txt")); err != nil || string(got) != "x" {
+		t.Errorf("f.txt = %q, %v", got, err)
+	}
+}
+
+// Even an empty upload must not report success while leaving a regular file where
+// the caller expects a directory.
+func TestPutDirRefusesARegularFileDestination(t *testing.T) {
+	needZstd(t)
+	dst := filepath.Join(t.TempDir(), "out")
+	if err := os.WriteFile(dst, []byte("a file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := putDirLocal(t, t.TempDir(), dst); err == nil {
+		t.Error("an empty upload onto a regular file succeeded")
+	}
 }
 
 // A file named like a staging file is someone's artifact, not scratch space.
