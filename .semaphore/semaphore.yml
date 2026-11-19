@@ -218,7 +218,9 @@ blocks:
             - docker run --rm signing-tools:$(yq -r '.signing-tools.version' images/calico-signing-tools/versions.yaml)-amd64 syft version
 
   # Run in the golang image at the version versions.yaml pins, so the tests see the
-  # same Go the go-build image ships and the agent needs none of its own.
+  # same Go the go-build image ships and the agent needs none of its own. The zstd
+  # CLI is what the VM decompresses transfers with; without it scratch-utils skips
+  # those tests.
   - name: Go unit tests
     dependencies: []
     task:
@@ -226,4 +228,4 @@ blocks:
         - name: go test
           commands:
             - GO_VERSION=$(hack/generate-version-tag-name.sh -f images/calico-go-build/versions.yaml -g)
-            - docker run --rm -v "$PWD:/src" -w /src golang:${GO_VERSION} go test ./scratch-utils/... ./cmd/...
+            - docker run --rm -v "$PWD:/src" -w /src golang:${GO_VERSION} sh -c 'apt-get update -qq && apt-get install -y -qq zstd >/dev/null && go test ./scratch-utils/... ./cmd/...'
