@@ -106,6 +106,10 @@ func run(ctx context.Context) int {
 	}
 	defer conn.Close()
 	cancelSetup()
+	if err := conn.RequireZstd(); err != nil {
+		fmt.Fprintf(os.Stderr, "runonvm: %v\n", err)
+		return 1
+	}
 
 	// On ANY exit, so a mid-run failure still returns logs.
 	defer func() {
