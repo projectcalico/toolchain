@@ -427,9 +427,12 @@ func writeAtomicCheck(path string, data io.Reader, check func() error) error {
 	if err == nil {
 		err = check()
 	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), path)
+	}
 	if err != nil {
 		os.Remove(tmp.Name())
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	return nil
 }
