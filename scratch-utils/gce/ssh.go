@@ -225,6 +225,20 @@ func (s *SSH) Run(cmd string, stdout, stderr io.Writer) (exitCode int, err error
 	return 0, nil
 }
 
+// RequireZstd fails unless the VM has the zstd CLI. Every transfer, the job's own
+// script included, needs it, so a script cannot install it; without this check an
+// image lacking it fails mid-upload with a bare "command not found".
+func (s *SSH) RequireZstd() error {
+	code, err := s.Run("command -v zstd", io.Discard, io.Discard)
+	if err != nil {
+		return fmt.Errorf("checking the VM for zstd: %w", err)
+	}
+	if code != 0 {
+		return errors.New("the VM image has no zstd CLI, which every transfer to and from it needs; boot an image with zstd installed")
+	}
+	return nil
+}
+
 // PutData writes data to remote at the given mode, creating parent dirs.
 func (s *SSH) PutData(data []byte, remote string, mode os.FileMode) error {
 	err := s.runWithInput(putCommand(remote, mode), func(w io.Writer) error {
@@ -282,22 +296,36 @@ func (s *SSH) PutDir(localDir, remoteDir string) error {
 	return nil
 }
 
-// putDirCommand extracts stdin, a zstd tar, into a staging directory beside
-// remoteDir, so a stream cut short leaves nothing at remoteDir: extracting in place
-// kept every entry before the cut, the last one truncated. A new remoteDir is the
-// staging directory renamed; an existing one gets the staged entries copied in,
-// not the staging directory itself, whose 0700 would replace its mode. tar runs
-// the decompressor itself, so a corrupt stream fails the command rather than
-// vanishing into a pipeline's exit status.
+// putDirCommand extracts stdin, a zstd tar, into a staging directory, so a stream
+// cut short leaves remoteDir as it was: extracting in place kept every entry before
+// the cut, the last one truncated. tar runs the decompressor itself, so a corrupt
+// stream fails the command rather than vanishing into a pipeline's exit status.
+//
+// An existing remoteDir stages inside itself, which needs no write access to its
+// parent (a put into /tmp or a home directory) and keeps the staging on its
+// filesystem, so the merge hard-links rather than writing the payload twice; plain
+// cp covers an entry that is a mount point. --remove-destination replaces an
+// existing read-only file or symlink as tar did, rather than failing on the one or
+// writing through the other. Only the staged entries are merged: the staging
+// directory's 0700 would otherwise replace remoteDir's mode.
+//
+// A new remoteDir is the staging directory renamed. -d rather than -e, so a regular
+// file at remoteDir reaches the rename and fails it, even for an empty upload.
 func putDirCommand(remoteDir string) string {
 	q := util.ShellQuote(remoteDir)
 	qd := util.ShellQuote(filepath.Dir(remoteDir))
 	return fmt.Sprintf(
-		`mkdir -p %s && t="$(mktemp -d %s/.putdir.XXXXXX)" && trap 'rm -rf "$t"' EXIT && `+
+		`if [ -d %[1]s ]; then `+
+			`t="$(mktemp -d %[1]s/.putdir.XXXXXX)" && trap 'rm -rf "$t"' EXIT && `+
+			`tar --zstd -xf - -C "$t" && `+
+			`{ find "$t" -mindepth 1 -maxdepth 1 -exec cp -al --remove-destination -t %[1]s/ {} + || `+
+			`find "$t" -mindepth 1 -maxdepth 1 -exec cp -a --remove-destination -t %[1]s/ {} +; }; `+
+			`else `+
+			`mkdir -p %[2]s && t="$(mktemp -d %[2]s/.putdir.XXXXXX)" && trap 'rm -rf "$t"' EXIT && `+
 			`tar --zstd -xf - -C "$t" && `+
 			// mktemp's 0700 would otherwise become the new directory's mode.
-			`if [ -e %s ]; then find "$t" -mindepth 1 -maxdepth 1 -exec cp -a -t %s/ {} +; else chmod u=rwx,go=rx "$t" && mv -T -- "$t" %s && trap - EXIT; fi`,
-		qd, qd, q, q, q)
+			`chmod u=rwx,go=rx "$t" && mv -T -- "$t" %[1]s && trap - EXIT; fi`,
+		q, qd)
 }
 
 // runWithInput runs cmd on the VM with what write produces, zstd-compressed, as its
