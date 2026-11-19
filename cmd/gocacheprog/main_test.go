@@ -237,7 +237,7 @@ func TestGoBuildReadsACacheFilledByAPlainBuild(t *testing.T) {
 	}
 	work := t.TempDir()
 	helper := filepath.Join(work, "gocacheprog")
-	if out, err := exec.Command(goBin, "build", "-o", helper, ".").CombinedOutput(); err != nil {
+	if out, err := exec.Command(goBin, "build", "-buildvcs=false", "-o", helper, ".").CombinedOutput(); err != nil {
 		t.Fatalf("building the helper: %v\n%s", err, out)
 	}
 	mod := filepath.Join(work, "mod")
