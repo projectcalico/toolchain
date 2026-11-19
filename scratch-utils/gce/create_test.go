@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,16 +18,19 @@ import (
 )
 
 // fakeCompute is the slice of the compute API Create uses. Each zone's insert
-// either succeeds, conflicts, or never finishes; a slow one can leave a machine
-// behind, as GCE did when it took longer than the per-zone deadline.
+// either succeeds, conflicts, runs out of capacity, or never finishes; a slow one
+// can leave a machine behind, as GCE did when it took longer than the per-zone
+// deadline.
 type fakeCompute struct {
-	mu        sync.Mutex
-	insert    map[string]string // zone -> "ok" | "conflict" | "slow" | "late" | "late-failed"
+	mu sync.Mutex
+	// "<type>/<zone>" or just "<zone>" -> "ok" | "conflict" | "exhausted" | "slow" |
+	// "late" | "late-failed"; the type-qualified key wins.
+	insert    map[string]string
 	instances map[string]string // zone -> status
-	inserts   []string
+	inserts   []string          // "<type> in <zone>", in order
 	deletes   []string
-	// lateDone is when a late insert's operation finishes, well past the per-zone
-	// deadline.
+	// lateDone is when a late insert's operation finishes: past the per-zone
+	// deadline, inside the second one a landed machine gets.
 	lateDone map[string]time.Time
 }
 
@@ -70,6 +74,11 @@ func (f *fakeCompute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			reply(compute.Operation{Name: op, Status: "DONE"})
 			return
 		}
+		if strings.HasPrefix(op, "exhausted") {
+			reply(compute.Operation{Name: op, Status: "DONE", Error: &compute.OperationError{
+				Errors: []*compute.OperationErrorErrors{{Code: "ZONE_RESOURCE_POOL_EXHAUSTED", Message: "no capacity"}}}})
+			return
+		}
 		if strings.HasPrefix(op, "slow") {
 			// Never DONE: the caller's deadline is what ends the wait.
 			f.mu.Unlock()
@@ -81,20 +90,32 @@ func (f *fakeCompute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reply(compute.Operation{Name: op, Status: "DONE"})
 	case zoneAt > 0 && r.Method == http.MethodPost:
 		z := parts[zoneAt]
-		f.inserts = append(f.inserts, z)
-		switch f.insert[z] {
+		var body compute.Instance
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		machineType := body.MachineType[strings.LastIndex(body.MachineType, "/")+1:]
+		f.inserts = append(f.inserts, machineType+" in "+z)
+		behaviour, ok := f.insert[machineType+"/"+z]
+		if !ok {
+			behaviour = f.insert[z]
+		}
+		switch behaviour {
 		case "conflict":
 			w.WriteHeader(http.StatusConflict)
 			reply(map[string]any{"error": map[string]any{"code": 409, "message": "already exists"}})
+		case "exhausted":
+			reply(compute.Operation{Name: "exhausted-" + z, Status: "RUNNING"})
 		case "slow":
 			reply(compute.Operation{Name: "slow-" + z, Status: "RUNNING"})
 		case "late", "late-failed":
 			f.instances[z] = "PROVISIONING"
-			op := f.insert[z] + "-" + z
+			op := behaviour + "-" + z
 			if f.lateDone == nil {
 				f.lateDone = map[string]time.Time{}
 			}
-			f.lateDone[op] = time.Now().Add(500 * time.Millisecond)
+			f.lateDone[op] = time.Now().Add(600 * time.Millisecond)
 			reply(compute.Operation{Name: op, Status: "RUNNING"})
 		default:
 			f.instances[z] = "PROVISIONING"
@@ -126,7 +147,7 @@ func newFakeClient(t *testing.T, f *fakeCompute) *Client {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Client{svc: svc, project: "p", zoneTimeout: 200 * time.Millisecond}
+	return &Client{svc: svc, project: "p", zoneTimeout: 400 * time.Millisecond}
 }
 
 func createIn(c *Client, zones ...string) (string, error) {
@@ -177,6 +198,47 @@ func TestCreateMovesOnFromASlowInsertThatMadeNothing(t *testing.T) {
 	}
 	if len(f.deletes) != 1 || f.deletes[0] != "z-a" {
 		t.Errorf("deletes = %v, want the abandoned z-a cleaned up", f.deletes)
+	}
+}
+
+// An insert that never finishes, with its machine already there, gets one more
+// per-zone deadline and no more: waiting it out on the overall deadline would
+// leave every remaining fallback unattempted.
+func TestCreateGivesUpOnAWedgedInsertAndFallsBack(t *testing.T) {
+	f := &fakeCompute{insert: map[string]string{"z-a": "slow", "z-b": "ok"}, instances: map[string]string{"z-a": "PROVISIONING"}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	zone, err := newFakeClient(t, f).Create(ctx, Config{Name: "vm", MachineTypes: []string{"t1", "t2"}, Zones: []string{"z-a", "z-b"}})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if zone != "z-b" {
+		t.Errorf("zone = %q, want the next zone", zone)
+	}
+	if want := []string{"t1 in z-a", "t1 in z-b"}; !slices.Equal(f.inserts, want) {
+		t.Errorf("inserts = %v, want %v", f.inserts, want)
+	}
+	if len(f.deletes) != 1 || f.deletes[0] != "z-a" {
+		t.Errorf("deletes = %v, want the wedged z-a cleaned up", f.deletes)
+	}
+}
+
+// Capacity runs out by machine type as well as by zone: the first type is tried in
+// every zone before the next, and the first success ends the search.
+func TestCreateFallsBackToTheNextMachineType(t *testing.T) {
+	f := &fakeCompute{insert: map[string]string{
+		"t1/z-a": "exhausted", "t1/z-b": "exhausted",
+		"t2/z-a": "exhausted", "t2/z-b": "ok",
+	}, instances: map[string]string{}}
+	zone, err := newFakeClient(t, f).Create(context.Background(), Config{Name: "vm", MachineTypes: []string{"t1", "t2", "t3"}, Zones: []string{"z-a", "z-b"}})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if zone != "z-b" {
+		t.Errorf("zone = %q, want z-b", zone)
+	}
+	if want := []string{"t1 in z-a", "t1 in z-b", "t2 in z-a", "t2 in z-b"}; !slices.Equal(f.inserts, want) {
+		t.Errorf("inserts = %v, want %v and nothing after the success", f.inserts, want)
 	}
 }
 

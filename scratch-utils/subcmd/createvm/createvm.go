@@ -231,10 +231,8 @@ func checkDiskPerformance(diskType string, iops, throughput int64) error {
 	return nil
 }
 
-// overallTimeout budgets every machine-type-and-zone attempt in full. A timed-out
-// attempt then checks for and deletes the abandoned VM, so it costs PerZoneTimeout +
-// 2*CleanupTimeout; counting less left the last attempts unmade. The minute covers
-// client setup.
+// overallTimeout budgets every machine-type-and-zone attempt in full; counting less
+// leaves the last attempts unmade. The minute covers client setup.
 func overallTimeout(attempts int) time.Duration {
-	return time.Duration(attempts)*(gce.PerZoneTimeout+2*gce.CleanupTimeout) + time.Minute
+	return time.Duration(attempts)*gce.AttemptTimeout + time.Minute
 }

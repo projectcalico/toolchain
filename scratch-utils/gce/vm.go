@@ -130,10 +130,13 @@ func (c *Client) createInZone(ctx context.Context, zone, machineType string, cfg
 	err = c.waitZoneOp(zctx, zone, op.Name)
 	// A slow insert whose machine already exists holds the name against every other
 	// zone, so moving on would only meet 409s. It can still fail, so it is waited
-	// out on the overall deadline rather than taken as done.
+	// out rather than taken as done -- for one more per-zone deadline, so a wedged
+	// insert cannot eat the budget the remaining fallbacks need.
 	if err != nil && zctx.Err() != nil && ctx.Err() == nil && c.liveIn(zone, cfg.Name) {
 		fmt.Fprintf(os.Stderr, "[gce] insert of %s in %s outlived its deadline, but the machine exists; waiting for it\n", cfg.Name, zone)
-		err = c.waitZoneOp(ctx, zone, op.Name)
+		lateCtx, lateCancel := context.WithTimeout(ctx, timeout)
+		defer lateCancel()
+		err = c.waitZoneOp(lateCtx, zone, op.Name)
 	}
 	if err != nil {
 		// The insert was accepted, so an instance may exist. Left behind it would run
@@ -160,9 +163,13 @@ func (c *Client) liveIn(zone, name string) bool {
 }
 
 // CleanupTimeout bounds each of the two calls a timed-out zone makes, the check for
-// its machine and the synchronous delete. Exported because a failing zone costs
-// PerZoneTimeout + 2*CleanupTimeout, not just the former.
+// its machine and the synchronous delete.
 const CleanupTimeout = 2 * time.Minute
+
+// AttemptTimeout is the most one machine-type-and-zone attempt can take: a
+// timed-out insert, the check for its machine, the second wait if one landed, and
+// the delete.
+const AttemptTimeout = 2*PerZoneTimeout + 2*CleanupTimeout
 
 // deleteBestEffort builds its own context: the caller's is typically already
 // expired, which is why we are here.
