@@ -245,7 +245,8 @@ func TestGoBuildReadsACacheFilledByAPlainBuild(t *testing.T) {
 	}
 	work := t.TempDir()
 	helper := filepath.Join(work, "gocacheprog")
-	helperBuild := exec.Command(goBin, "build", "-buildvcs=false", "-o", helper, ".")
+	// A test cannot mount its shared directory read-only.
+	helperBuild := exec.Command(goBin, "build", "-buildvcs=false", "-ldflags", "-X main.allowWritableReadOnly=true", "-o", helper, ".")
 	helperBuild.Env = append(env, "GOCACHE="+filepath.Join(work, "helper-cache"))
 	if out, err := helperBuild.CombinedOutput(); err != nil {
 		t.Fatalf("building the helper: %v\n%s", err, out)
@@ -424,5 +425,47 @@ func TestNewCacheMakesPathsAbsolute(t *testing.T) {
 	}
 	if !filepath.IsAbs(c.local) || !filepath.IsAbs(c.readOnly) {
 		t.Errorf("paths = %q, %q; want both absolute", c.readOnly, c.local)
+	}
+}
+
+// The go command's own disk cache keeps an executable as a directory holding just
+// that file, which a build filling the read-only cache leaves for go run and go
+// tool; it is served as the file inside.
+func TestExecutableStoredAsADirectoryIsServed(t *testing.T) {
+	dir := t.TempDir()
+	p := putOf(1, "exe", []byte("binary"))
+	session(t, &cache{local: dir}, p)
+	out := filepath.Join(dir, fmt.Sprintf("%02x", p.req.OutputID[0]), fmt.Sprintf("%x-d", p.req.OutputID))
+	if err := os.Rename(out, out+".tmp"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(out, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(out+".tmp", filepath.Join(out, "tool")); err != nil {
+		t.Fatal(err)
+	}
+	e, ok := lookup(dir, p.req.ActionID)
+	if !ok || e.path != filepath.Join(out, "tool") {
+		t.Fatalf("lookup = %+v, %v; want the file inside %s", e, ok, out)
+	}
+	// One holding anything but that single file is not an output.
+	if err := os.WriteFile(filepath.Join(out, "extra"), nil, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := lookup(dir, p.req.ActionID); ok {
+		t.Error("served a directory holding more than one file")
+	}
+}
+
+// A hit is a path into the read-only directory that the go command may rename on
+// install, so a writable one is refused rather than drained.
+func TestWritableReadOnlyDirectoryIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	if err := requireReadOnly(dir); err == nil || !strings.Contains(err.Error(), "writable") {
+		t.Errorf("requireReadOnly(%s) = %v, want a refusal", dir, err)
+	}
+	if err := requireReadOnly(""); err != nil {
+		t.Errorf("requireReadOnly with no -ro = %v, want nil", err)
 	}
 }

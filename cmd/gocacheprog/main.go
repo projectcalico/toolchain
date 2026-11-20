@@ -10,8 +10,10 @@
 //
 // -dir defaults to a directory under GOCACHE, and should stay under it: the go
 // command moves, rather than copies, a cached file it installs from anywhere
-// else, which would empty the local cache. The read-only directory is safe only
-// mounted read-only, for the same reason, and only while nothing writes to it.
+// else, which would empty the local cache. For the same reason the read-only
+// directory must be mounted read-only, which the helper checks at startup, and
+// nothing may write to it while builds read it. Nothing trims -dir: a CI pod
+// throws it away, but on a long-lived machine it grows until removed by hand.
 // -v prints one line of hit and miss counts when the go command closes it.
 package main
 
@@ -33,6 +35,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -78,6 +81,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if err := requireReadOnly(c.readOnly); err != nil {
+		log.Fatal(err)
+	}
 	if err := c.serve(os.Stdin, os.Stdout); err != nil {
 		log.Fatal(err)
 	}
@@ -86,6 +92,27 @@ func main() {
 			c.readOnlyHits.Load(), c.readOnly, c.localHits.Load(), c.misses.Load(), c.puts.Load())
 	}
 }
+
+// requireReadOnly refuses a -ro directory this process could write to. The go
+// command installs a hit by renaming it when it can, so on a writable mount the
+// shared cache would lose the files other builds are reading.
+func requireReadOnly(dir string) error {
+	if dir == "" || allowWritableReadOnly == "true" {
+		return nil
+	}
+	// access(2), not the mode bits: root may write anywhere a mount allows.
+	if err := syscall.Access(dir, accessWrite); err == nil {
+		return fmt.Errorf("-ro %s is writable; mount it read-only, or leave out -ro", dir)
+	}
+	return nil
+}
+
+// allowWritableReadOnly lets the tests, which cannot mount a directory read-only,
+// skip that check. Only a -ldflags -X build sets it.
+var allowWritableReadOnly string
+
+// accessWrite is access(2)'s W_OK, which package syscall does not name.
+const accessWrite = 0x2
 
 // defaultGoCache is where the go command keeps its own build cache, which it
 // passes to this program in GOCACHE when the user set one.
@@ -362,12 +389,32 @@ func lookup(dir string, actionID []byte) (entry, bool) {
 	if err != nil || nanos < 0 {
 		return entry{}, false
 	}
-	path := filepath.Join(dir, shard(outputID), fields[2]+"-d")
+	path, ok := outputFile(filepath.Join(dir, shard(outputID), fields[2]+"-d"))
 	// An entry whose output was trimmed, or is not the size it claims, is a miss.
+	if !ok {
+		return entry{}, false
+	}
 	if info, err := os.Stat(path); err != nil || info.Size() != size {
 		return entry{}, false
 	}
 	return entry{outputID: outputID, size: size, time: time.Unix(0, nanos), path: path}, true
+}
+
+// outputFile is the file an output's path holds. The go command's own disk cache
+// stores an executable as a directory holding just that file, named for it.
+func outputFile(path string) (string, bool) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", false
+	}
+	if !info.IsDir() {
+		return path, true
+	}
+	files, err := os.ReadDir(path)
+	if err != nil || len(files) != 1 || !files[0].Type().IsRegular() {
+		return "", false
+	}
+	return filepath.Join(path, files[0].Name()), true
 }
 
 func shard(id []byte) string {
