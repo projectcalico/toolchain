@@ -14,6 +14,7 @@ build:
 	mkdir -p calico-binfmt/bin calico-go-build/bin/
 	cp ../cmd/bin/binfmt-$(ARCH) calico-binfmt/bin/binfmt-$(ARCH)
 	cp ../cmd/bin/semvalidator-$(ARCH) calico-go-build/bin/semvalidator-$(ARCH)
+	cp ../cmd/bin/gocacheprog-$(ARCH) calico-go-build/bin/gocacheprog-$(ARCH)
 
 # Separate so the binfmt image does not compile the GCP SDK to build a binary it
 # never contains. go-build ships it too, so a CI step that already runs in go-build
