@@ -63,6 +63,11 @@ func MustLocalSecret(name, destPath string) error {
 // SetupComputeADC points Application Default Credentials at the compute SA key:
 // the file at COMPUTE_SA_KEY if it exists, else the env var named by
 // COMPUTE_SA_ENV materialized to a temp file.
+//
+// COMPUTE_SA_ENV set but empty means no key: the default credentials stand, which
+// in a GKE pod without workload identity are the node's service account. That
+// reaches a VM in the cluster's own project, such as one that has to attach a
+// disk the cluster made, without a key for it.
 func SetupComputeADC() error {
 	if p := os.Getenv("COMPUTE_SA_KEY"); p != "" {
 		if _, err := os.Stat(p); err == nil {
@@ -70,7 +75,10 @@ func SetupComputeADC() error {
 			return nil
 		}
 	}
-	name := os.Getenv("COMPUTE_SA_ENV")
+	name, set := os.LookupEnv("COMPUTE_SA_ENV")
+	if set && name == "" {
+		return nil
+	}
 	if name == "" {
 		name = "banzai-google-service-account.json"
 	}

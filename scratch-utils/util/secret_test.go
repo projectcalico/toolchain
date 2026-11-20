@@ -113,6 +113,35 @@ func TestSetupComputeADCErrorsWhenTheEnvVarIsMissing(t *testing.T) {
 	}
 }
 
+func TestSetupComputeADCLeavesTheDefaultCredentialsWhenTheEnvIsEmpty(t *testing.T) {
+	t.Setenv("COMPUTE_SA_KEY", "")
+	t.Setenv("COMPUTE_SA_ENV", "")
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+	os.Unsetenv("GOOGLE_APPLICATION_CREDENTIALS")
+	if err := SetupComputeADC(); err != nil {
+		t.Fatalf("SetupComputeADC: %v", err)
+	}
+	if p, ok := os.LookupEnv("GOOGLE_APPLICATION_CREDENTIALS"); ok {
+		t.Errorf("GOOGLE_APPLICATION_CREDENTIALS = %q, want it unset", p)
+	}
+}
+
+// Unset, it still means the banzai key, which a step that never set it relies on.
+func TestSetupComputeADCDefaultsToTheBanzaiKey(t *testing.T) {
+	t.Setenv("COMPUTE_SA_KEY", "")
+	t.Setenv("COMPUTE_SA_ENV", "")
+	os.Unsetenv("COMPUTE_SA_ENV")
+	t.Setenv("banzai-google-service-account.json", `{"type":"service_account"}`)
+	if err := SetupComputeADC(); err != nil {
+		t.Fatalf("SetupComputeADC: %v", err)
+	}
+	p := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
+	t.Cleanup(func() { os.Remove(p) })
+	if got, err := os.ReadFile(p); err != nil || string(got) != `{"type":"service_account"}` {
+		t.Errorf("key file %q = %q, %v", p, got, err)
+	}
+}
+
 // os.WriteFile applies its mode only on create, so a secret written over an existing
 // world-readable path stayed readable.
 func TestLocalSecretTightensAnExistingPermissiveFile(t *testing.T) {
