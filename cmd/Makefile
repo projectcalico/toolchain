@@ -7,7 +7,7 @@ BINFMT_VERSION = $(shell yq -r '.tonistiigi-binfmt.version' ../images/calico-bin
 QEMU_VERSION = $(shell yq -r '.qemu.version' ../images/calico-binfmt/versions.yaml)
 
 .PHONY: build
-build: bin/binfmt-$(ARCH) bin/semvalidator-$(ARCH)
+build: bin/binfmt-$(ARCH) bin/semvalidator-$(ARCH) bin/gocacheprog-$(ARCH)
 
 .PHONY: scratch-utils-build
 scratch-utils-build: bin/scratch-utils-$(ARCH)
@@ -19,6 +19,10 @@ bin/binfmt-$(ARCH): binfmt/main.go
 bin/semvalidator-$(ARCH): semvalidator/main.go
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(ARCH) \
 		go build -o bin/semvalidator-$(ARCH) -v -buildvcs=false -ldflags "-s -w" semvalidator/main.go
+
+bin/gocacheprog-$(ARCH): gocacheprog/main.go
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(ARCH) \
+		go build -o bin/gocacheprog-$(ARCH) -v -buildvcs=false -ldflags "-s -w" ./gocacheprog
 
 # Unlike the single-file binaries above, this one spans ../scratch-utils/, so list
 # every .go file it compiles -- otherwise an incremental build ships a stale binary.
