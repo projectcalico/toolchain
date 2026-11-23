@@ -225,6 +225,41 @@ func (s *SSH) Run(cmd string, stdout, stderr io.Writer) (exitCode int, err error
 	return 0, nil
 }
 
+// RunStoppable is Run for a job that has to be stoppable: cmd runs in a session of
+// its own on the VM, and when ctx ends the whole session gets SIGTERM. Signalling
+// only the shell would not do: bash runs a trap only once its foreground command
+// has exited, so a script's cleanup would wait on the very build it should cut
+// short. It then waits up to stopWait for cmd to exit, which is the time the
+// script's own traps get. pidFile is a VM path to record the session in.
+func (s *SSH) RunStoppable(ctx context.Context, cmd, pidFile string, stdout, stderr io.Writer, stopWait time.Duration) (int, error) {
+	type result struct {
+		code int
+		err  error
+	}
+	qPid := util.ShellQuote(pidFile)
+	inner := "echo $$ > " + qPid + "; " + cmd
+	done := make(chan result, 1)
+	go func() {
+		code, err := s.Run("setsid -w bash -c "+util.ShellQuote(inner), stdout, stderr)
+		done <- result{code, err}
+	}()
+	select {
+	case res := <-done:
+		return res.code, res.err
+	case <-ctx.Done():
+	}
+	// The session is the shell's pid; a negative pid signals the whole group.
+	if code, err := s.Run(`kill -TERM -- -"$(cat `+qPid+`)"`, io.Discard, stderr); err != nil || code != 0 {
+		fmt.Fprintf(stderr, "[runonvm] could not signal the script (rc=%d): %v\n", code, err)
+	}
+	select {
+	case res := <-done:
+		return res.code, res.err
+	case <-time.After(stopWait):
+		return -1, fmt.Errorf("the script did not stop within %s of SIGTERM", stopWait)
+	}
+}
+
 // RequireZstd fails unless the VM has the zstd CLI. Every transfer, the job's own
 // script included, needs it, so a script cannot install it; without this check an
 // image lacking it fails mid-upload with a bare "command not found".

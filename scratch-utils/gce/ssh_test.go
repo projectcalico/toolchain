@@ -5,12 +5,14 @@ package gce
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // tarDir and untar are the two halves of PutDir/GetDir: a tree that survives both
@@ -519,5 +521,43 @@ func TestGetCommandForgivesOnlyAMissingDirectory(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(filepath.Join(broken, "locked"), 0o755) })
 	if code, _ := run(broken); code == 0 {
 		t.Error("tar failure was reported as success")
+	}
+}
+
+// A stopped run signals the whole script, so its trap runs while the build it
+// was waiting on is cut short, and the trap gets to finish.
+func TestRunStoppableRunsTheScriptsTrap(t *testing.T) {
+	conn := testSSH(t)
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "cleaned-up")
+	script := filepath.Join(dir, "job.sh")
+	body := "trap 'sleep 0.2; echo done > " + marker + "' EXIT\nsleep 60\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(500*time.Millisecond, cancel)
+	start := time.Now()
+	code, err := conn.RunStoppable(ctx, "bash "+script, filepath.Join(dir, "pid"), io.Discard, io.Discard, 10*time.Second)
+	if err != nil {
+		t.Fatalf("RunStoppable: %v", err)
+	}
+	if took := time.Since(start); took > 10*time.Second {
+		t.Errorf("took %s: the script's sleep was not cut short", took)
+	}
+	if code == 0 {
+		t.Error("a stopped script reported success")
+	}
+	if got, _ := os.ReadFile(marker); strings.TrimSpace(string(got)) != "done" {
+		t.Error("the script's EXIT trap did not run to completion")
+	}
+}
+
+// A script that finishes on its own is unaffected.
+func TestRunStoppableReturnsTheExitCode(t *testing.T) {
+	conn := testSSH(t)
+	code, err := conn.RunStoppable(context.Background(), "exit 3", filepath.Join(t.TempDir(), "pid"), io.Discard, io.Discard, time.Second)
+	if err != nil || code != 3 {
+		t.Errorf("RunStoppable = %d, %v; want 3, nil", code, err)
 	}
 }

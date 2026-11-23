@@ -22,8 +22,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/projectcalico/go-build/scratch-utils/gce"
@@ -43,9 +45,19 @@ func (s *stringList) Set(v string) error {
 // long as it takes.
 const setupTimeout = 10 * time.Minute
 
+// stopWait is how long a stopped script gets to run its own cleanup (reports,
+// diagnostics). A pod's deadline or cancel arrives as SIGTERM with ArgoCI's
+// default 240s grace period, and the --gets still need time after it.
+const stopWait = 3 * time.Minute
+
+// remotePidFile records the script's session, for a stop to signal it.
+const remotePidFile = "/tmp/runonvm.pid"
+
 // Run executes the runonvm subcommand and returns its exit code.
 func Run() int {
-	return run(context.Background())
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+	return run(ctx)
 }
 
 func run(ctx context.Context) int {
@@ -212,12 +224,16 @@ func run(ctx context.Context) int {
 		runCmd = fmt.Sprintf(". %s && bash %s", util.ShellQuote(remoteEnv), qScript)
 	}
 	fmt.Printf("[runonvm] running %s on %s\n", remoteScript, name)
-	code, err := conn.Run(runCmd, os.Stdout, os.Stderr)
+	code, err := conn.RunStoppable(ctx, runCmd, remotePidFile, os.Stdout, os.Stderr, stopWait)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "runonvm: run: %v\n", err)
 		return 1
 	}
 	fmt.Printf("[runonvm] script finished (rc=%d)\n", code)
+	// A stopped step fails, even if the script exits 0 from its trap.
+	if code == 0 && ctx.Err() != nil {
+		return 128 + int(syscall.SIGTERM)
+	}
 	return code
 }
 
