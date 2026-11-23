@@ -101,15 +101,93 @@ func TestRequiresAnImageOrAFamily(t *testing.T) {
 // Each failing zone costs its attempt plus the cleanup after it; budgeting only the
 // attempt meant the last of four zones was never tried.
 func TestOverallTimeoutLeavesEveryZoneAFullAttempt(t *testing.T) {
-	perZone := gce.PerZoneTimeout + gce.CleanupTimeout
 	for _, zones := range []int{1, 2, 3, 4, 8} {
 		got := overallTimeout(zones)
-		if min := time.Duration(zones) * perZone; got < min {
+		if min := time.Duration(zones) * gce.AttemptTimeout; got < min {
 			t.Errorf("zones=%d: budget %v is under %v, so the last zone can be skipped", zones, got, min)
 		}
 	}
-	// The default four zones, spelled out.
-	if got, want := overallTimeout(4), 4*(3*time.Minute+2*time.Minute); got < want {
+	// The default four zones, spelled out: two insert waits and two cleanup calls each.
+	if got, want := overallTimeout(4), 4*(2*3*time.Minute+2*2*time.Minute); got < want {
 		t.Errorf("four zones: %v < %v", got, want)
+	}
+}
+
+// Unset is "leave it to GCE", which is the only right answer for a pd disk; a
+// zero or garbage value would otherwise reach the API and fail far from its cause.
+func TestParseOptionalCount(t *testing.T) {
+	const name = "TEST_PROVISIONED"
+	for _, tc := range []struct {
+		in      string
+		want    int64
+		wantErr bool
+	}{
+		{"", 0, false},
+		{"10000", 10000, false},
+		{" 200 ", 200, false},
+		{"0", 0, true},
+		{"-5", 0, true},
+		{"10k", 0, true},
+	} {
+		t.Setenv(name, tc.in)
+		got, err := parseOptionalCount(name)
+		if (err != nil) != tc.wantErr || got != tc.want {
+			t.Errorf("parseOptionalCount(%q) = %d, %v; want %d, err=%v", tc.in, got, err, tc.want, tc.wantErr)
+		}
+	}
+}
+
+func TestParseLabelsLetsTheCallerOverrideDefaults(t *testing.T) {
+	got, err := parseLabels("ci-provider=argoci, ci-workflow-id=calico-14503-pr-lqlkf,ci-project=calico,ci-cron=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{
+		"ci-runner":      "true",
+		"ci-provider":    "argoci",
+		"ci-workflow-id": "calico-14503-pr-lqlkf",
+		"ci-project":     "calico",
+		"ci-cron":        "",
+	} {
+		if v, ok := got[key]; !ok || v != want {
+			t.Errorf("label %s = %q (present %v), want %q", key, v, ok, want)
+		}
+	}
+}
+
+func TestParseLabelsRejectsWhatGCEWould(t *testing.T) {
+	for _, in := range []string{"noequals", "Ci-step=x", "ci-step=Node", "ci-step=a.b", "=x", "ci-step=" + strings.Repeat("a", 64)} {
+		if _, err := parseLabels(in); err == nil {
+			t.Errorf("parseLabels(%q) accepted a label GCE would refuse", in)
+		}
+	}
+}
+
+// Provisioned performance on a disk type that takes none would fail every attempt
+// in turn at GCE, so it is refused up front.
+func TestCheckDiskPerformance(t *testing.T) {
+	for _, tc := range []struct {
+		disk             string
+		iops, throughput int64
+		ok               bool
+	}{
+		{"pd-ssd", 0, 0, true},
+		{"hyperdisk-balanced", 6000, 290, true},
+		{"pd-extreme", 10000, 0, true},
+		{"pd-ssd", 3000, 0, false},
+		{"pd-balanced", 0, 200, false},
+		{"pd-extreme", 0, 200, false},
+	} {
+		if err := checkDiskPerformance(tc.disk, tc.iops, tc.throughput); (err == nil) != tc.ok {
+			t.Errorf("checkDiskPerformance(%s, %d, %d) = %v, want ok=%v", tc.disk, tc.iops, tc.throughput, err, tc.ok)
+		}
+	}
+}
+
+// The default labels are held to GCE's rules too: CI_WORKFLOW_LABEL is the caller's.
+func TestParseLabelsChecksTheDefaults(t *testing.T) {
+	t.Setenv("CI_WORKFLOW_LABEL", "Calico.Run")
+	if _, err := parseLabels(""); err == nil {
+		t.Error("an invalid CI_WORKFLOW_LABEL was accepted")
 	}
 }

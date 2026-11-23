@@ -308,6 +308,13 @@ COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
 # Copy semvalidator release tool.
 COPY bin/semvalidator-${TARGETARCH} /usr/local/bin/semvalidator
 
+# The CI VM lifecycle tool, for steps that drive a VM from a go-build container.
+COPY bin/scratch-utils-${TARGETARCH} /usr/local/bin/scratch-utils
+
+# A GOCACHEPROG helper, so a CI step can read a Go build cache another step left
+# on a shared read-only disk in place, instead of unpacking a copy.
+COPY bin/gocacheprog-${TARGETARCH} /usr/local/bin/gocacheprog
+
 # Install Argo CI helper scripts so this image can serve as the base for Argo
 # workflows, which have no pre-checkout step. Semaphore runners do their own
 # checkout and ignore these.
