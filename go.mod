@@ -4,6 +4,7 @@ go 1.26.3
 
 require (
 	github.com/containerd/platforms v1.0.0-rc.4
+	github.com/klauspost/compress v1.19.1
 	github.com/moby/buildkit v0.30.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/pkg/errors v0.9.1
