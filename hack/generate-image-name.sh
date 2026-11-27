@@ -121,6 +121,13 @@ if [[ $is_tag != true ]]; then
     name="${name}-${sha:0:7}"
 fi
 
+# A pre-release tag (k8s1.38.0-beta.0-1) runs past GKE's 39. Dropping the llvm/k8s
+# words, as the family does, fits it, and a name that already fit keeps its
+# spelling, so nothing a node pool pins moves.
+if [[ ${#name} -gt $max_len && $is_tag == true ]]; then
+    name="$(fold_name "$(echo "${name//llvm/}" | sed 's/k8s//g')")"
+fi
+
 if [[ ${#name} -gt $max_len ]]; then
     echo "image name is ${#name} characters, over the limit of ${max_len}: $name" >&2
     exit 1
